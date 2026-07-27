@@ -1,0 +1,17 @@
+# Tooling config only — the project is run from source, not installed.
+# Dependencies live in requirements.txt.
+
+[tool.ruff]
+line-length = 90
+exclude = [".venv", "_archive"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+# B008: `Depends(...)` in a default is how FastAPI injection is written.
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The repo root is the import root: `import backend`, `import agent`, ...
+pythonpath = ["."]
+addopts = "-q"

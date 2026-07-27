@@ -1,0 +1,27 @@
+# Fly.io deploy config. Edit `app` to your Fly app name, then:
+#   fly launch --no-deploy   # (once, to create the app + a Postgres cluster)
+#   fly secrets set OPENAI_API_KEY=... OPENAI_MODEL=... GITHUB_TOKEN=...
+#   fly deploy
+app = "code-review-copilot"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ALLOWED_ORIGINS = "https://github.com"
+  LLM_BACKEND = "openai"   # no local model server in the cloud
+  # DATABASE_URL is injected by `fly postgres attach`.
+
+[http_service]
+  internal_port = 8001
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "15s"
+    timeout = "2s"

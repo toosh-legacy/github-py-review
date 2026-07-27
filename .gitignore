@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Local env & data
+.env
+*.sqlite3
+.chroma/
+chroma/
+
+# Training artifacts (datasets, adapters, merged/GGUF models, run curves)
+training/data/
+training/adapters/
+training/merged/
+training/iterations.json
+*.gguf
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Test / tooling
+.pytest_cache/
+.ruff_cache/
+
+# Pre-restructure copy of the old layout; delete once you're happy.
+_archive/

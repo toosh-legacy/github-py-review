@@ -1,0 +1,33 @@
+{
+  "bugs_caught": 2,
+  "bugs_missed": 0,
+  "false_positives": 1,
+  "buggy_total": 2,
+  "clean_total": 1,
+  "recall": 1.0,
+  "precision": 0.667,
+  "f1": 0.8,
+  "false_positive_rate": 1.0,
+  "avg_tokens": 0.0,
+  "p95_latency_ms": 86,
+  "per_entry": [
+    [
+      "bug-bare-except",
+      "buggy",
+      "caught",
+      3
+    ],
+    [
+      "bug-unused-import",
+      "buggy",
+      "caught",
+      2
+    ],
+    [
+      "clean-comment",
+      "clean",
+      "false-positive",
+      1
+    ]
+  ]
+}

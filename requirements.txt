@@ -1,0 +1,28 @@
+# Everything the project needs, in one place. Install from the repo root:
+#     pip install -r requirements.txt
+
+# --- Backend ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+httpx==0.28.1
+
+# --- Agent + reviewers ---
+langgraph==0.2.60
+openai==1.59.6          # also the transport for local OpenAI-compatible servers
+ruff==0.8.6             # the static-analysis node, and the project's linter
+
+# --- Streamlit demo ---
+streamlit==1.41.1
+requests==2.32.3
+
+# --- Tests / load test ---
+pytest==8.3.4
+locust==2.32.5
+
+# Optional / heavy — lazily imported, so the app runs fine without them:
+#   chromadb==0.5.23   RAG index (rag/)
+#   mcp==1.2.0         MCP server entrypoint (mcp_server/server.py)
