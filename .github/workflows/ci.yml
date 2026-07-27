@@ -18,7 +18,7 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
       - name: Compile check
-        run: python -m compileall -q backend agent llm_model database github_client mcp_server rag training
+        run: python -m compileall -q src ml
       - name: Tests
         run: pytest
         env:
@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build backend image
-        run: docker build -t code-review-copilot:ci .
+        run: docker build -f infra/Dockerfile -t code-review-copilot:ci .
 
   deploy:
     runs-on: ubuntu-latest

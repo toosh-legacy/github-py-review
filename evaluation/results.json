@@ -9,7 +9,7 @@
   "f1": 0.8,
   "false_positive_rate": 1.0,
   "avg_tokens": 0.0,
-  "p95_latency_ms": 86,
+  "p95_latency_ms": 152,
   "per_entry": [
     [
       "bug-bare-except",

@@ -6,9 +6,9 @@ happens in the cloud; the exported model is then served locally (see
 export_to_gguf.py).
 
 Usage (on a GPU box, from the repo root):
-    pip install -r training/requirements-train.txt
-    python training/curate_dataset.py --src <good-code-dir> --out training/data
-    python training/train_lora.py --data training/data --out training/adapters/round1
+    pip install -r ml/requirements-train.txt
+    python ml/curate_dataset.py --src <good-code-dir> --out ml/data
+    python ml/train_lora.py --data ml/data --out ml/adapters/round1
 
 Heavy deps (torch, transformers, peft, trl, bitsandbytes, datasets) are imported
 lazily so the module stays importable — and lint/compile-checkable — without them.
@@ -23,8 +23,8 @@ from pathlib import Path
 @dataclass
 class TrainConfig:
     base_model: str = "Qwen/Qwen2.5-Coder-3B-Instruct"
-    data_dir: str = "training/data"
-    out_dir: str = "training/adapters/latest"
+    data_dir: str = "ml/data"
+    out_dir: str = "ml/adapters/latest"
     epochs: float = 2.0
     lr: float = 2e-4
     lora_r: int = 16
@@ -137,8 +137,8 @@ def _config_from_args(args: argparse.Namespace) -> TrainConfig:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base-model", default=TrainConfig.base_model)
-    ap.add_argument("--data", default="training/data")
-    ap.add_argument("--out", default="training/adapters/latest")
+    ap.add_argument("--data", default="ml/data")
+    ap.add_argument("--out", default="ml/adapters/latest")
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--lora-r", type=int, default=16)

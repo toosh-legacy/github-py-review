@@ -3,7 +3,7 @@
 # export_to_gguf.py rewrites the FROM line to point at the quantized GGUF it
 # produces. Then register it with Ollama and serve on CPU:
 #
-#   ollama create codereview-qwen -f training/Modelfile
+#   ollama create codereview-qwen -f ml/Modelfile
 #   # .env:  LLM_BACKEND=local  LOCAL_LLM_MODEL=codereview-qwen
 #
 # The backend sends its own system prompt per request (llm_model/prompts.py), so

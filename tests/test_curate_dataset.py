@@ -5,7 +5,7 @@ covered in CI. The GPU scripts (train/eval/iterate/export) are only compile-chec
 """
 import json
 
-from training.curate_dataset import build
+from ml.curate_dataset import build
 
 CLEAN_SOURCE = '''\
 def total(items):

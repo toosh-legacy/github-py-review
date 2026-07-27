@@ -24,7 +24,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from llm_model.base import loads_lenient  # noqa: E402
 
@@ -154,7 +154,7 @@ def evaluate(val_path: Path, predict: PredictFn) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--val", default="training/data/val.jsonl")
+    ap.add_argument("--val", default="ml/data/val.jsonl")
     ap.add_argument("--backend", choices=["endpoint", "adapter"], default="endpoint")
     ap.add_argument("--base-url", default="http://localhost:11434/v1")
     ap.add_argument("--model", default="qwen2.5-coder:3b")

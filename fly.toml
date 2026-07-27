@@ -6,7 +6,8 @@ app = "code-review-copilot"
 primary_region = "iad"
 
 [build]
-  dockerfile = "Dockerfile"
+  # Run `fly deploy` from the repo root; the build context is that root.
+  dockerfile = "infra/Dockerfile"
 
 [env]
   ALLOWED_ORIGINS = "https://github.com"

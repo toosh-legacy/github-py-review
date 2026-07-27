@@ -18,7 +18,7 @@ Chrome extension    ─┼─▶ FastAPI backend (:8001)
                      │      └─ SQLite/Postgres: review history
 Explicit human click ─▶ POST /reviews/{id}/post-comment   (the ONLY write path)
 
-training/  ── curate → QLoRA fine-tune (GPU) → export GGUF → serve on CPU (Ollama)
+ml/        ── curate → QLoRA fine-tune (GPU) → export GGUF → serve on CPU (Ollama)
 ```
 
 Two ideas hold the whole thing together:
@@ -33,25 +33,25 @@ Follow this path; each stop lists the file and the one thing to take away.
 
 | # | File | What it is | Take away |
 |---|------|-----------|-----------|
-| 1 | `schemas.py` | Pydantic `Issue`/`Report` + request models | One shared contract everything imports; change it → change everything on purpose |
-| 2 | `config.py` | pydantic-settings; all env in one `settings` | No scattered `os.getenv`; `active_backend`/`llm_available` derive behaviour from config |
-| 3 | `agent/diff_utils.py` | tiny unified-diff parser; `DiffFile` | `from_full_file` reuses the diff machinery for whole-file debug (every line "added") |
-| 4 | `llm_model/prompts.py` | every prompt string | Tight bug taxonomy + "stay silent" is what stops a small model over-reporting |
-| 5 | `llm_model/base.py` | `ReviewLLM` protocol, `ChatReviewLLM`, `get_review_llm()` | **The seam.** Subclasses only build a client; `_run` does prompt→JSON→`Issue` |
-| 6 | `llm_model/{mock,local,openai}_model.py` | the three backends | local & OpenAI differ by *one constructor*; mock keeps everything offline |
-| 7 | `llm_model/verify.py` | second-pass auditor + `validate_fix` | Precision layer: proposer casts wide, verifier confirms, fixes must `ast.parse` |
-| 8 | `agent/nodes.py` | ruff runner + LLM call wrappers | Pure functions → trivially unit-testable; findings mapped to real line numbers |
-| 9 | `agent/graph.py` | the two LangGraph graphs + entry points | `run_review_graph` (diff) and `run_debug_file` (whole file) share nodes |
-| 10 | `backend/service.py` | orchestration + persistence + guards | The only place that touches both the agent and the DB |
-| 11 | `backend/main.py` | routes, CORS, error handlers | Thin HTTP layer; `/debug/file`, `/scan/repo`, and the human-only post-comment route |
-| 12 | `github_client/` | diff fetch + comment post | `comment.py` is the single write path, outside the agent by design |
-| 13 | `rag/indexer.py` | Chroma index, degrades to no-op | Optional context; `index_files` stores whole files for the debug flow |
-| 14 | `mcp_server/` | the two tools exposed over MCP | Same tool logic FastAPI calls, also available to MCP clients |
+| 1 | `src/schemas.py` | Pydantic `Issue`/`Report` + request models | One shared contract everything imports; change it → change everything on purpose |
+| 2 | `src/config.py` | pydantic-settings; all env in one `settings` | No scattered `os.getenv`; `active_backend`/`llm_available` derive behaviour from config |
+| 3 | `src/agent/diff_utils.py` | tiny unified-diff parser; `DiffFile` | `from_full_file` reuses the diff machinery for whole-file debug (every line "added") |
+| 4 | `src/llm_model/prompts.py` | every prompt string | Tight bug taxonomy + "stay silent" is what stops a small model over-reporting |
+| 5 | `src/llm_model/base.py` | `ReviewLLM` protocol, `ChatReviewLLM`, `get_review_llm()` | **The seam.** Subclasses only build a client; `_run` does prompt→JSON→`Issue` |
+| 6 | `src/llm_model/{mock,local,openai}_model.py` | the three backends | local & OpenAI differ by *one constructor*; mock keeps everything offline |
+| 7 | `src/llm_model/verify.py` | second-pass auditor + `validate_fix` | Precision layer: proposer casts wide, verifier confirms, fixes must `ast.parse` |
+| 8 | `src/agent/nodes.py` | ruff runner + LLM call wrappers | Pure functions → trivially unit-testable; findings mapped to real line numbers |
+| 9 | `src/agent/graph.py` | the two LangGraph graphs + entry points | `run_review_graph` (diff) and `run_debug_file` (whole file) share nodes |
+| 10 | `src/backend/service.py` | orchestration + persistence + guards | The only place that touches both the agent and the DB |
+| 11 | `src/backend/main.py` | routes, CORS, error handlers | Thin HTTP layer; `/debug/file`, `/scan/repo`, and the human-only post-comment route |
+| 12 | `src/github_client/` | diff fetch + comment post | `comment.py` is the single write path, outside the agent by design |
+| 13 | `src/rag/indexer.py` | Chroma index, degrades to no-op | Optional context; `index_files` stores whole files for the debug flow |
+| 14 | `src/mcp_server/` | the two tools exposed over MCP | Same tool logic FastAPI calls, also available to MCP clients |
 | 15 | `tests/` | unit + contract + safety | `test_agent_safety.py` mechanically proves the agent can't write |
-| 16 | `extension/` | MV3 Chrome extension | `content_script.js` (PR) + `repo_script.js` (scan & debug) → backend |
-| 17 | `streamlit_app/app.py` | the dashboard | Reads the same `Report`; nothing UI-specific leaks into the backend |
+| 16 | `apps/extension/` | MV3 Chrome extension | `content_script.js` (PR) + `repo_script.js` (scan & debug) → backend |
+| 17 | `apps/dashboard/app.py` | the Streamlit web app | Reads the same `Report`; nothing UI-specific leaks into the backend |
 | 18 | `evaluation/run_eval.py` | labeled benchmark harness | Credibility: bugs caught/missed, FP rate, tokens, p95 latency |
-| 19 | `training/` | LoRA fine-tuning pipeline | Curate → train (GPU) → export → serve (CPU); iterate to a plateau |
+| 19 | `ml/` | LoRA fine-tuning pipeline | Curate → train (GPU) → export → serve (CPU); iterate to a plateau |
 
 ## 3. The tech stack, and how we actually use it
 
@@ -98,7 +98,7 @@ The fix is two roles: the proposer (recall) casts a wide net; the verifier
 away any suggested fix that isn't valid Python. Precision is the binding
 constraint, so the architecture spends its complexity there.
 
-### LoRA / QLoRA fine-tuning (`training/`)
+### LoRA / QLoRA fine-tuning (`ml/`)
 - **LoRA** freezes the base model and trains small low-rank adapter matrices on
   top — a few million parameters instead of billions, so it fits one GPU and
   produces a tiny artifact. **QLoRA** adds 4-bit quantization of the frozen base,
@@ -130,34 +130,34 @@ permissions, and the backend still can't write anything.
 
 ### Persistence, deployment, CI
 - **DB:** SQLAlchemy over SQLite by default (zero setup), Postgres in Docker.
-- **Docker:** `Dockerfile` + `docker-compose.yml` at the repo root — one image,
-  `uvicorn backend.main:app`, with Postgres in compose.
+- **Docker:** `infra/Dockerfile` + `infra/docker-compose.yml` (build context is
+  the repo root) — one image, `uvicorn backend.main:app`, Postgres in compose.
 - **Deploy:** `fly.toml` (Fly.io) or `Procfile` (Railway); cloud runs the hosted
   model, local runs Ollama.
 - **CI (`.github/workflows/ci.yml`):** ruff → compile → pytest (mock backend) →
-  docker build → gated deploy. Everything runs from the repo root — the single
-  import root (`pyproject.toml pythonpath=["."]`).
+  docker build → gated deploy. Everything runs from the repo root; `src/` is the
+  single import root (`pyproject.toml pythonpath=["src", "."]`).
 
 ## 4. Try the whole thing
 
 ```bash
-# backend (mock — zero setup)
-./backend/.venv/Scripts/python.exe -m uvicorn backend.main:app --port 8001
+# backend (mock — zero setup); OpenAI in production (LLM_BACKEND=openai + key)
+PYTHONPATH=src ./.venv/Scripts/python.exe -m uvicorn backend.main:app --port 8001
 curl -X POST localhost:8001/debug/file -H "Content-Type: application/json" \
      -d '{"path":"x.py","content":"import os\ndef f():\n    try:\n        pass\n    except:\n        pass\n"}'
 
-# real local model (CPU)
+# real local model (CPU) instead of OpenAI
 ./scripts/setup_local_model.ps1            # pulls qwen2.5-coder:3b in Ollama
 #   .env:  LLM_BACKEND=local
 
-# dashboard
-BACKEND_URL=http://localhost:8001 streamlit run streamlit_app/app.py
+# web app
+BACKEND_URL=http://localhost:8001 streamlit run apps/dashboard/app.py
 
-# extension: load extension/ unpacked at chrome://extensions
+# extension: load apps/extension/ unpacked at chrome://extensions
 
 # fine-tune (GPU box) then serve on CPU
-python training/curate_dataset.py --src . --out training/data
-python training/iterate.py --data training/data --out training/adapters
+python ml/curate_dataset.py --src src --out ml/data
+python ml/iterate.py --data ml/data --out ml/adapters
 ```
 
 ## 5. Patterns worth keeping
