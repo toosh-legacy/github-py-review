@@ -1,15 +1,13 @@
 """FastAPI application: routes, CORS, error handlers, DB startup.
 
-    POST /security/scan              scan a repo's files for security findings
+    POST /security/scan              scan a repo's files, return the report
     POST /security/scan/full         same, but return the stored record (id + report)
-    GET  /security/scans             list past security scans
-    GET  /security/scans/{id}        full stored security report
-    POST /review                     run a review, return the report
-    POST /review/full                same, but return the stored record (id + report)
-    GET  /health                     liveness + current LLM mode
-    GET  /reviews                    list past reviews
-    GET  /reviews/{id}               full stored report
-    POST /reviews/{id}/post-comment  explicit, human-triggered write path
+    GET  /security/scans             list past scans
+    GET  /security/scans/{id}        full stored report
+    GET  /health                     liveness + which backend triage would use
+
+Every route is read-only with respect to the caller's repository: files arrive
+in the request body and the server never fetches, writes, or pushes anything.
 
 Run with:  uvicorn backend.main:app --port 8001   (from the repo root)
 """
@@ -24,12 +22,6 @@ from sqlalchemy.orm import Session
 from config import settings
 from database.session import get_db, init_db
 from schemas import (
-    PostCommentRequest,
-    PostCommentResponse,
-    Report,
-    ReviewRecord,
-    ReviewRequest,
-    ReviewSummary,
     SecurityReport,
     SecurityScanRecord,
     SecurityScanRequest,
@@ -46,7 +38,15 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Repo Security Scanner", version="2.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Repo Security Scanner",
+    version="1.0.0",
+    summary=(
+        "Secrets, vulnerable dependencies and unsafe code — "
+        "found by tools, triaged by an LLM."
+    ),
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,7 +61,8 @@ install_error_handlers(app)
 
 @app.get("/health")
 def health() -> dict[str, object]:
-    # Report the reviewer actually in use (mock | local | openai), not a guess.
+    # Report the backend actually in use, not a guess. "mock" means no model is
+    # configured — detection still runs, triage is skipped.
     return {
         "status": "ok",
         "llm_mode": settings.active_backend,
@@ -69,10 +70,6 @@ def health() -> dict[str, object]:
     }
 
 
-# --------------------------------------------------------------------------- #
-# Security scanning — the primary flow. Detection is done by tools (secret
-# rules, OSV, bandit, eslint-plugin-security); the LLM only triages.
-# --------------------------------------------------------------------------- #
 @app.post("/security/scan", response_model=SecurityReport)
 def security_scan(
     request: SecurityScanRequest, db: Session = Depends(get_db)
@@ -99,41 +96,3 @@ def security_scan_by_id(
     scan_id: int, db: Session = Depends(get_db)
 ) -> SecurityScanRecord:
     return service.get_security_scan(db, scan_id)
-
-
-@app.post("/review", response_model=Report)
-def review(request: ReviewRequest, db: Session = Depends(get_db)) -> Report:
-    """Review a PR URL or a pasted diff. Returns the report contract."""
-    return service.create_review(db, request).report
-
-
-@app.post("/review/full", response_model=ReviewRecord)
-def review_full(request: ReviewRequest, db: Session = Depends(get_db)) -> ReviewRecord:
-    """Same as /review but returns the stored record (id + report).
-
-    Convenience for clients (Streamlit, extension) that need the review id to
-    later call the post-comment route.
-    """
-    return service.create_review(db, request)
-
-
-@app.get("/reviews", response_model=list[ReviewSummary])
-def reviews(db: Session = Depends(get_db)) -> list[ReviewSummary]:
-    return service.list_reviews(db)
-
-
-@app.get("/reviews/{review_id}", response_model=ReviewRecord)
-def review_by_id(review_id: int, db: Session = Depends(get_db)) -> ReviewRecord:
-    return service.get_review(db, review_id)
-
-
-@app.post("/reviews/{review_id}/post-comment", response_model=PostCommentResponse)
-def post_comment(
-    review_id: int,
-    body: PostCommentRequest,
-    db: Session = Depends(get_db),
-) -> PostCommentResponse:
-    """Explicit, human-triggered write path. NOT an agent tool — the agent graph
-    has no ability to post, merge, or modify anything."""
-    url = service.post_comment(db, review_id, body.pr_url)
-    return PostCommentResponse(comment_url=url)

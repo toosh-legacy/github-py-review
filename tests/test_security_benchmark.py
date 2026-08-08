@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-EVAL = Path(__file__).resolve().parents[1] / "src" / "ml" / "evaluation"
+EVAL = Path(__file__).resolve().parents[1] / "src" / "evaluation"
 BENCH = EVAL / "security_benchmark"
 
 

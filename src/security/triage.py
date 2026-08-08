@@ -248,12 +248,13 @@ def triage(
     if not settings.security_triage:
         return findings, 0
 
-    from llm_model.base import ChatReviewLLM, get_review_llm
+    from llm_model.base import ChatLLM, get_llm
     from llm_model.prompts import TRIAGE_SYSTEM_PROMPT, TRIAGE_USER_PROMPT
 
-    llm = get_review_llm()
-    if not isinstance(llm, ChatReviewLLM):
-        return findings, 0  # mock mode: the deterministic result is the product
+    llm = get_llm()
+    if not isinstance(llm, ChatLLM):
+        # No model configured. The deterministic result is the product.
+        return findings, 0
 
     contexts = contexts or {}
     triaged: list[SecurityFinding] = []

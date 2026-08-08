@@ -11,6 +11,9 @@
 # to the whole suite rather than named files, because any new detector test will
 # need a credential-shaped fixture too.
 tests/**
+src/evaluation/security_benchmark/**
+# The benchmark's path before the LoRA pipeline was removed. `--history` finds
+# its fixtures under the name they had at the time, not the one they have now.
 src/ml/evaluation/security_benchmark/**
 
 # Documentation examples (README curl samples, the guide's walkthrough).

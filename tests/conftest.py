@@ -1,16 +1,13 @@
 """Shared test fixtures: an isolated SQLite DB and a TestClient per test.
 
 Each test gets a fresh temp database so history assertions are deterministic,
-and `LLM_BACKEND=mock` so no test ever reaches for a network reviewer.
+and `LLM_BACKEND=mock` so no test ever reaches for a network model.
 """
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 
 import pytest
-
-FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture()
@@ -40,8 +37,3 @@ def client(tmp_path, monkeypatch):
 
     with TestClient(backend.main.app) as c:
         yield c
-
-
-@pytest.fixture()
-def sample_diff() -> str:
-    return (FIXTURES / "sample.diff").read_text()

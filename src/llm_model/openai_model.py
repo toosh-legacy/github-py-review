@@ -1,12 +1,12 @@
-"""Reviewer backed by the hosted OpenAI API (model from OPENAI_MODEL)."""
+"""Backend for the hosted OpenAI API (model from OPENAI_MODEL)."""
 from __future__ import annotations
 
 from config import settings
 
-from .base import ChatReviewLLM
+from .base import ChatLLM
 
 
-class OpenAIReviewLLM(ChatReviewLLM):
+class OpenAILLM(ChatLLM):
     def __init__(self) -> None:
         from openai import OpenAI  # lazy: only needed when a key is set
 

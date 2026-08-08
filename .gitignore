@@ -8,15 +8,6 @@ venv/
 # Local env & data
 .env
 *.sqlite3
-.chroma/
-chroma/
-
-# Training artifacts (datasets, adapters, merged/GGUF models, run curves)
-src/ml/data/
-src/ml/adapters/
-src/ml/merged/
-src/ml/iterations.json
-*.gguf
 
 # OS / editor
 .DS_Store

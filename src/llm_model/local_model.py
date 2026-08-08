@@ -1,17 +1,18 @@
-"""Reviewer backed by a local OpenAI-compatible server.
+"""Backend for a local OpenAI-compatible server.
 
 Works with Ollama (`http://localhost:11434/v1`), llama.cpp's server, vLLM,
 LM Studio — anything speaking the chat-completions API. Nothing leaves the
-machine and no API key is needed.
+machine and no API key is needed, which matters here: triage prompts contain
+source code, even though credentials are redacted before they are built.
 """
 from __future__ import annotations
 
 from config import settings
 
-from .base import ChatReviewLLM
+from .base import ChatLLM
 
 
-class LocalReviewLLM(ChatReviewLLM):
+class LocalLLM(ChatLLM):
     def __init__(self) -> None:
         from openai import OpenAI  # lazy: the SDK is only the transport here
 

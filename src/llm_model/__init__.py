@@ -1,17 +1,13 @@
-"""The LLM reviewer, behind a swappable interface.
+"""The LLM seam, behind a swappable interface.
 
-    base.py          the `ReviewLLM` contract, the shared chat implementation,
-                     and `get_review_llm()` — the factory everything else calls
-    mock_model.py    deterministic stub; needs no key, so the pipeline and the
-                     tests run entirely offline
+    base.py          `ChatLLM` (one JSON chat round-trip), `NoLLM` (the null
+                     implementation), and `get_llm()` — the factory triage calls
     local_model.py   any OpenAI-compatible local server (Ollama, llama.cpp,
                      vLLM). Nothing leaves the machine.
     openai_model.py  the hosted OpenAI API
-    prompts.py       every prompt string, kept out of the client code
-    verify.py        the precision layer: a second pass that must confirm a
-                     finding, plus a syntax check on suggested fixes
+    prompts.py       the triage prompts, kept out of the client code
 
-`LLM_BACKEND` picks the reviewer (default "auto": local, then OpenAI, then
-mock). Import from the submodules — nothing is re-exported here, which keeps
-the OpenAI SDK out of the mock-mode import path.
+`LLM_BACKEND` picks the backend (default "auto": local, then OpenAI, then none).
+Import from the submodules — nothing is re-exported here, which keeps the OpenAI
+SDK out of the import path when no model is configured.
 """

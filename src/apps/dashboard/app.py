@@ -4,11 +4,9 @@ Open access — no auth. Point BACKEND_URL at your backend (default localhost:80
 or set it live in the sidebar.
 
 Tabs:
-  1. Security    — browse repository scans: findings by category and severity,
-                   the evidence, the reason, and the fix. The primary view.
-  2. Review      — paste a GitHub PR URL or raw diff, run the code-review agent.
-  3. History     — browse past code reviews.
-  4. Evaluation  — the benchmark table + charts from the eval harness.
+  1. Scans       — browse repository scans: findings by category and severity,
+                   the evidence, the reason, and the fix.
+  2. Benchmark   — precision/recall/F1 per detector from the eval harness.
 
 Severity is rendered as stat tiles with an icon and a label rather than a chart:
 three ordered counts are a job for numbers, and severity is a reserved status
@@ -26,7 +24,12 @@ import requests
 import streamlit as st
 
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "http://localhost:8001").rstrip("/")
-RESULTS = Path(__file__).parents[2] / "ml" / "evaluation" / "results.json"
+RESULTS = (
+    Path(__file__).parents[2]
+    / "evaluation"
+    / "security_benchmark"
+    / "results.json"
+)
 
 _SEV_COLOR = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 _SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -64,62 +67,11 @@ with st.sidebar:
 
 st.title("🛡️ Repo Security Scanner")
 
-security_tab, review_tab, history_tab, eval_tab = st.tabs(
-    ["Security scans", "Review a PR", "Review history", "Evaluation results"]
-)
+scans_tab, eval_tab = st.tabs(["Security scans", "Benchmark"])
 
 
 # --------------------------------------------------------------------------- #
-# Shared report renderer
-# --------------------------------------------------------------------------- #
-def _render_report(report: dict, *, review_id: int | None = None) -> None:
-    issues = report.get("issues", [])
-    counts = {s: sum(1 for i in issues if i.get("severity") == s) for s in _SEV_COLOR}
-
-    st.write(f"**Summary:** {report.get('summary', '')}")
-    cols = st.columns(6)
-    cols[0].metric("Issues", len(issues))
-    cols[1].metric("🔴 High", counts["high"])
-    cols[2].metric("🟠 Medium", counts["medium"])
-    cols[3].metric("🟡 Low", counts["low"])
-    cols[4].metric("Tokens", report.get("tokens_used", 0))
-    cols[5].metric("Latency (ms)", report.get("latency_ms", 0))
-
-    if issues:
-        chosen = st.multiselect(
-            "Filter by severity",
-            options=list(_SEV_COLOR),
-            default=list(_SEV_COLOR),
-            key=f"filter-{review_id}",
-        )
-    else:
-        chosen = []
-        st.info("No issues found. 🎉")
-
-    shown = sorted(
-        (i for i in issues if i.get("severity") in chosen),
-        key=lambda i: _SEV_ORDER.get(i.get("severity"), 9),
-    )
-    for i in shown:
-        badge = _SEV_COLOR.get(i["severity"], "⚪")
-        with st.expander(
-            f"{badge} {i['severity'].upper()} — {i['file']}:{i['line_start']}"
-        ):
-            st.write(i["description"])
-            if i.get("suggested_fix"):
-                st.code(i["suggested_fix"])
-
-    st.download_button(
-        "⬇️ Download report (JSON)",
-        data=json.dumps(report, indent=2),
-        file_name=f"review-{review_id or 'report'}.json",
-        mime="application/json",
-        key=f"dl-{review_id}",
-    )
-
-
-# --------------------------------------------------------------------------- #
-# Tab 1 — Security scans (the primary view)
+# Tab 1 — Security scans
 # --------------------------------------------------------------------------- #
 _CAT_LABEL = {
     "secret": "🔑 Secret",
@@ -218,7 +170,7 @@ def _render_security_report(report: dict, *, scan_id: int | None = None) -> None
     )
 
 
-with security_tab:
+with scans_tab:
     st.caption(
         "Scans are started from the Chrome extension (a repository page → "
         "**🛡️ Security scan**) or the CLI (`python -m security.cli .`). This view "
@@ -255,114 +207,80 @@ with security_tab:
 
 
 # --------------------------------------------------------------------------- #
-# Tab 2 — Review
-# --------------------------------------------------------------------------- #
-with review_tab:
-    mode = st.radio("Input", ["PR URL", "Raw diff"], horizontal=True)
-    payload: dict = {}
-    if mode == "PR URL":
-        url = st.text_input("GitHub PR URL", placeholder="https://github.com/o/r/pull/1")
-        payload = {"pr_url": url} if url else {}
-    else:
-        diff = st.text_area("Unified diff", height=200)
-        payload = {"diff": diff} if diff else {}
-
-    if st.button("Review", type="primary", disabled=not payload):
-        with st.spinner("Running the review agent…"):
-            try:
-                r = requests.post(f"{backend}/review/full", json=payload, timeout=120)
-                if r.status_code >= 400:
-                    st.error(r.json().get("error", {}).get("message", r.text))
-                else:
-                    data = r.json()
-                    st.session_state["last_review"] = data
-            except requests.RequestException as exc:
-                st.error(f"Backend unreachable: {exc}")
-
-    last = st.session_state.get("last_review")
-    if last:
-        st.success(f"Review #{last['id']} complete")
-        _render_report(last["report"], review_id=last["id"])
-
-        with st.expander("📮 Post report as a PR comment (human action)"):
-            st.caption(
-                "Explicit, human-triggered write. Needs GITHUB_TOKEN on the backend "
-                "and a PR-URL-based review."
-            )
-            if st.button("Post comment", key="post-comment"):
-                try:
-                    pr = requests.post(
-                        f"{backend}/reviews/{last['id']}/post-comment", timeout=60
-                    )
-                    if pr.status_code >= 400:
-                        st.error(
-                            pr.json().get("error", {}).get("message", pr.text)
-                        )
-                    else:
-                        st.success("Comment posted.")
-                except requests.RequestException as exc:
-                    st.error(f"Backend unreachable: {exc}")
-
-
-# --------------------------------------------------------------------------- #
-# Tab 3 — Review history
-# --------------------------------------------------------------------------- #
-with history_tab:
-    st.subheader("Recent reviews")
-    try:
-        rows = requests.get(f"{backend}/reviews", timeout=10).json()
-    except requests.RequestException:
-        rows = None
-        st.info("Backend history unavailable.")
-
-    if rows:
-        st.dataframe(rows, use_container_width=True)
-        ids = [row.get("id") for row in rows if isinstance(row, dict) and "id" in row]
-        if ids:
-            picked = st.selectbox("Open a review", ids)
-            if st.button("Load report", key="load-history"):
-                try:
-                    detail = requests.get(f"{backend}/reviews/{picked}", timeout=30)
-                    if detail.status_code >= 400:
-                        st.error(detail.text)
-                    else:
-                        rec = detail.json()
-                        _render_report(rec.get("report", rec), review_id=picked)
-                except requests.RequestException as exc:
-                    st.error(f"Backend unreachable: {exc}")
-    elif rows is not None:
-        st.info("No reviews yet — run one in the Review tab.")
-
-
-# --------------------------------------------------------------------------- #
-# Tab 4 — Evaluation
+# Tab 2 — Benchmark
 # --------------------------------------------------------------------------- #
 with eval_tab:
-    st.subheader("Benchmark results")
-    if RESULTS.exists():
-        results = json.loads(RESULTS.read_text())
-        c = st.columns(4)
-        c[0].metric("Recall", results.get("recall"))
-        c[1].metric("Precision", results.get("precision"))
-        c[2].metric("FP rate", results.get("false_positive_rate"))
-        c[3].metric("p95 latency (ms)", results.get("p95_latency_ms"))
-        st.write(
-            f"Caught **{results['bugs_caught']}/{results['buggy_total']}** bugs · "
-            f"**{results['false_positives']}/{results['clean_total']}** "
-            "false positives · "
-            f"avg **{results['avg_tokens']}** tokens/review"
-        )
-        per_entry = results.get("per_entry", [])
-        if per_entry:
-            st.bar_chart(
-                {r[0]: r[3] for r in per_entry},
-                y_label="issues found",
-            )
-        st.table(
-            [
-                {"id": r[0], "type": r[1], "outcome": r[2], "issues": r[3]}
-                for r in per_entry
-            ]
+    st.subheader("Detector benchmark")
+    st.caption(
+        "Scored against a labelled fixture repo. Half of it is decoys — an "
+        "`.env.example`, AWS's own documented sample key, parameter-bound SQL "
+        "that reads like concatenation — because a scanner that fires on "
+        "everything has perfect recall and is worthless."
+    )
+    if not RESULTS.exists():
+        st.info(
+            "Run `python src/evaluation/run_security_eval.py` to generate "
+            "results.json."
         )
     else:
-        st.info("Run `python src/ml/evaluation/run_eval.py` to generate results.json.")
+        results = json.loads(RESULTS.read_text(encoding="utf-8"))
+        detection = results.get("detection", {})
+
+        overall = detection.get("overall", {})
+        c = st.columns(4)
+        c[0].metric("Precision", overall.get("precision"))
+        c[1].metric("Recall", overall.get("recall"))
+        c[2].metric("F1", overall.get("f1"))
+        c[3].metric("Scan latency (ms)", results.get("latency_ms"))
+
+        st.table(
+            [
+                {
+                    "detector": name,
+                    "precision": d.get("precision"),
+                    "recall": d.get("recall"),
+                    "f1": d.get("f1"),
+                    "caught": d.get("caught"),
+                    "missed": d.get("missed"),
+                    "false positives": d.get("false_positives"),
+                }
+                for name, d in detection.items()
+                if name != "overall"
+            ]
+        )
+
+        for label, items in (
+            ("Missed", results.get("missed", [])),
+            ("False positives", results.get("false_positives", [])),
+            ("Notes", results.get("notes", [])),
+        ):
+            if items:
+                st.markdown(f"**{label}**")
+                for item in items:
+                    st.caption(f"- {item}")
+
+        for note in results.get("degraded", []):
+            st.warning(note, icon="⚠️")
+
+        triage = results.get("triage")
+        if triage:
+            st.markdown("**Triage lift**")
+            if triage.get("backend") == "mock":
+                st.info(
+                    "No model was configured for this run, so triage did "
+                    "nothing. Point LLM_BACKEND at a model and re-run with "
+                    "`--triage` for a meaningful number.",
+                    icon="ℹ️",
+                )
+            t1, t2, t3 = st.columns(3)
+            t1.metric(
+                "precision@5",
+                triage.get("precision_at_5_after"),
+                delta=round(
+                    (triage.get("precision_at_5_after") or 0)
+                    - (triage.get("precision_at_5_before") or 0),
+                    3,
+                ),
+            )
+            t2.metric("Merged by the model", triage.get("merged_by_the_model"))
+            t3.metric("Tokens", triage.get("tokens_used"))

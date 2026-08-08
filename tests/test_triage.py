@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from config import settings
-from llm_model.base import ChatReviewLLM
+from llm_model.base import ChatLLM
 from schemas import SecurityFinding
 from security.triage import BATCH_SIZE, _apply, deterministic_triage, triage
 
@@ -244,7 +244,7 @@ def test_the_model_cannot_move_a_finding():
 # --------------------------------------------------------------------------- #
 # End to end
 # --------------------------------------------------------------------------- #
-def test_triage_without_a_reviewer_still_dedupes_and_ranks(monkeypatch):
+def test_triage_without_a_model_still_dedupes_and_ranks(monkeypatch):
     monkeypatch.setenv("LLM_BACKEND", "mock")
     findings = [make("a", severity="low"), make("b", severity="high")]
     out, tokens = triage(findings)
@@ -264,8 +264,8 @@ def test_triage_of_nothing_is_nothing():
 # findings survive all of it. Without a local model in CI this is the only place
 # the full triage path is exercised.
 # --------------------------------------------------------------------------- #
-class ScriptedLLM(ChatReviewLLM):
-    """A ChatReviewLLM whose replies are supplied, not generated."""
+class ScriptedLLM(ChatLLM):
+    """A ChatLLM whose replies are supplied, not generated."""
 
     model = "scripted"
 
@@ -283,7 +283,7 @@ class ScriptedLLM(ChatReviewLLM):
 
 def _run_with(monkeypatch, findings, replies):
     llm = ScriptedLLM(replies)
-    monkeypatch.setattr("llm_model.base.get_review_llm", lambda: llm)
+    monkeypatch.setattr("llm_model.base.get_llm", lambda: llm)
     monkeypatch.setattr(settings, "security_triage", True)
     out, tokens = triage(findings, {}, repo="acme/demo")
     return out, tokens, llm
@@ -336,7 +336,7 @@ def test_findings_are_batched_so_small_models_stay_coherent(monkeypatch):
 def test_triage_is_skipped_entirely_when_disabled(monkeypatch):
     findings = [make("1"), make("2", line_start=20)]
     llm = ScriptedLLM([{"findings": [{"id": "1", "severity": "high"}]}])
-    monkeypatch.setattr("llm_model.base.get_review_llm", lambda: llm)
+    monkeypatch.setattr("llm_model.base.get_llm", lambda: llm)
     monkeypatch.setattr(settings, "security_triage", False)
     out, tokens = triage(findings, {})
     assert llm.calls == 0 and tokens == 0

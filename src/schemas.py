@@ -1,85 +1,22 @@
 """The shared data contract. Every package in the repo imports from here.
 
-`Report` is the frozen output shape: the backend returns it, the database
-stores it, and Streamlit, the Chrome extension, and the evaluation harness all
-parse it. Change it and you change all of them at once — which is the point.
+`SecurityReport` is the frozen output shape: the backend returns it, the
+database stores it, and the Chrome extension, the dashboard, the CLI and the
+evaluation harness all parse it. Change it and you change all of them at once —
+which is the point.
+
+Detector provenance is kept separate from the LLM's triage on purpose: what a
+tool found is a fact, and what the model thinks of it is an opinion.
 """
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 Severity = Literal["high", "medium", "low"]
 
-
-class Issue(BaseModel):
-    file: str
-    line_start: int
-    line_end: int
-    severity: Severity
-    description: str
-    suggested_fix: str = ""
-
-
-class Report(BaseModel):
-    summary: str
-    issues: list[Issue] = Field(default_factory=list)
-    tokens_used: int = 0
-    latency_ms: int = 0
-
-
-class ReviewRequest(BaseModel):
-    """Input to POST /review. Exactly one of pr_url / diff must be provided."""
-
-    pr_url: str | None = None
-    diff: str | None = None
-
-    @model_validator(mode="after")
-    def _exactly_one_source(self) -> ReviewRequest:
-        provided = [v for v in (self.pr_url, self.diff) if v]
-        if len(provided) != 1:
-            raise ValueError("provide exactly one of 'pr_url' or 'diff'")
-        return self
-
-
-class ReviewSummary(BaseModel):
-    """Row returned by GET /reviews (list view)."""
-
-    id: int
-    source: str
-    summary: str
-    issue_count: int
-    created_at: datetime
-
-
-class ReviewRecord(ReviewSummary):
-    """Full stored review returned by GET /reviews/{id}."""
-
-    report: Report
-
-
-class PostCommentRequest(BaseModel):
-    """Body for POST /reviews/{id}/post-comment. pr_url is optional when the
-    stored review already came from a PR URL."""
-
-    pr_url: str | None = None
-
-
-class PostCommentResponse(BaseModel):
-    comment_url: str
-
-
-# --------------------------------------------------------------------------- #
-# Security scanning contract.
-#
-# Deliberately separate from `Report`/`Issue`: those describe "an LLM read your
-# code and had an opinion". A security finding is produced by a *tool* (a
-# gitleaks-style rule, the OSV vulnerability database, bandit, eslint), so it
-# carries provenance — which detector fired, which rule, what the evidence was —
-# and keeps that separate from the LLM's triage of it.
-# --------------------------------------------------------------------------- #
 FindingCategory = Literal["secret", "dependency", "code"]
 
 # How much has to go right for an attacker before this finding bites.

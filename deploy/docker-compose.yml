@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: reviewdb
+      POSTGRES_DB: scans
     ports:
       - "5432:5432"
     volumes:
@@ -22,7 +22,7 @@ services:
     ports:
       - "8001:8001"
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/reviewdb
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/scans
       ALLOWED_ORIGINS: http://localhost:8501,https://github.com
       LLM_BACKEND: ${LLM_BACKEND:-auto}
       # host.docker.internal reaches an Ollama/llama.cpp server on the host.
@@ -30,7 +30,6 @@ services:
       LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen2.5-coder:3b}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-codex}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # Detection is deterministic; triage is the only part that needs a model.
       SECURITY_TRIAGE: ${SECURITY_TRIAGE:-true}
       SECURITY_OFFLINE: ${SECURITY_OFFLINE:-false}

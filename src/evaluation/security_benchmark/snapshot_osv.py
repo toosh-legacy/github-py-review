@@ -8,7 +8,7 @@ benchmark replays a snapshot instead.
 Run this deliberately, review the diff, and commit it — a changed snapshot is a
 change to the benchmark, not an incidental update:
 
-    python src/ml/evaluation/security_benchmark/snapshot_osv.py
+    python src/evaluation/security_benchmark/snapshot_osv.py
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[2]))
+sys.path.insert(0, str(HERE.parents[1]))
 
 from security.deps_scan import parse_manifests  # noqa: E402
 from security.osv import fetch_details, query_batch  # noqa: E402

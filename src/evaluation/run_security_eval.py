@@ -1,7 +1,7 @@
 """Score the security scanner against a labelled benchmark.
 
-    python src/ml/evaluation/run_security_eval.py            # detectors only
-    python src/ml/evaluation/run_security_eval.py --triage   # + the LLM stage
+    python src/evaluation/run_security_eval.py            # detectors only
+    python src/evaluation/run_security_eval.py --triage   # + the LLM stage
 
 What it measures, and why precision leads:
 
@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[1]))
+sys.path.insert(0, str(HERE.parent))
 
 BENCH = HERE / "security_benchmark"
 REPO = BENCH / "repo"
@@ -357,7 +357,7 @@ def main() -> None:
             print("  (mock backend — configure a real reviewer for a meaningful number)")
 
     RESULTS.write_text(json.dumps(results, indent=2), encoding="utf-8")
-    print(f"\nwrote {RESULTS.relative_to(HERE.parents[1])}")
+    print(f"\nwrote {RESULTS.relative_to(HERE.parent)}")
 
 
 if __name__ == "__main__":
