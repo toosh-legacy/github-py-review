@@ -180,13 +180,22 @@ permissions, and the backend still can't write anything.
 
 ### Persistence, deployment, CI
 - **DB:** SQLAlchemy over SQLite by default (zero setup), Postgres in Docker.
-- **Docker:** `deploy/Dockerfile` + `deploy/docker-compose.yml` (build context is
-  the repo root) — one image, `uvicorn backend.main:app`, Postgres in compose.
-- **Deploy:** `fly.toml` (Fly.io) or `Procfile` (Railway); cloud runs the hosted
-  model, local runs Ollama.
-- **CI (`.github/workflows/ci.yml`):** ruff → compile → pytest (mock backend) →
-  docker build → gated deploy. Everything runs from the repo root; `src/` is the
-  single import root (`pyproject.toml pythonpath=["src", "."]`).
+- **Docker:** `deploy/Dockerfile` builds in two stages — a Node stage installs
+  eslint-plugin-security from `package.json`, then the Python image copies in
+  both the plugin and the Node runtime. Without that the deployed scanner would
+  report its JS/TS detector as degraded on every scan. The build *asserts* the
+  detectors are present rather than shipping an image that silently degrades.
+- **Deploy:** `fly.toml` (Fly.io) or `Procfile` (Railway). Note that a plain
+  Python buildpack has no Node, so eslint falls back to pattern rules there.
+- **CI (`.github/workflows/ci.yml`):** ruff → compile → pytest → **self-scan**
+  → docker build → gated deploy. The self-scan runs this scanner on this
+  repository with `--fail-on high`, so a leaked credential or a newly published
+  CVE in our own dependencies breaks the build. It needs `fetch-depth: 0`,
+  because a depth-1 clone has no history to scan.
+
+The dogfooding is not decorative: it caught three high-severity CVEs in this
+project's own dependencies (langgraph and requests), which is why the pins moved.
+`src/` is the single import root (`pyproject.toml pythonpath=["src"]`).
 
 ## 4. Try the whole thing
 

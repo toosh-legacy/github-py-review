@@ -323,16 +323,59 @@ locust -f deploy/locustfile.py --host http://localhost:8001
 
 ## Deploy
 
-Production runs the **OpenAI** reviewer (no local model server in the cloud).
+The scanner works with no model configured — detection is entirely deterministic
+— so an API key is optional and only buys LLM triage.
 
-- **Fly.io:** `fly deploy` from the repo root (uses `fly.toml` →
-  `deploy/Dockerfile`). `fly secrets set OPENAI_API_KEY=... OPENAI_MODEL=...
-  GITHUB_TOKEN=...`; `LLM_BACKEND=openai` is set in `fly.toml`. Attach Postgres
-  with `fly postgres attach`.
-- **Railway/Heroku:** the root `Procfile` runs `uvicorn` with `PYTHONPATH=src`.
-  Set the same env vars; add a Postgres addon for `DATABASE_URL`.
-- **Web app:** deploy `src/apps/dashboard/app.py` to Streamlit Community Cloud; set
-  `BACKEND_URL` to your deployed API.
-- **Extension:** ship `src/apps/extension/` (set the backend URL in the popup).
-- **CI (`.github/workflows/ci.yml`):** lint → compile → tests → Docker build, with
-  a `main`-gated deploy step to wire up.
+**Fly.io** (config is in `fly.toml`, pointing at `deploy/Dockerfile`):
+
+```bash
+fly launch --no-deploy            # create the app
+fly postgres create && fly postgres attach <db>   # injects DATABASE_URL
+fly secrets set OPENAI_API_KEY=...  # optional: enables triage
+fly deploy
+```
+
+**Railway/Heroku:** the root `Procfile` runs `uvicorn` with `PYTHONPATH=src`.
+Add a Postgres addon for `DATABASE_URL`. Note that these buildpacks give you
+Python only — without Node the JS/TS detector falls back to its pattern rules
+and says so on every scan. Use the Docker image if you want eslint in production.
+
+**The image ships its own detectors.** A Node stage installs
+eslint-plugin-security from `package.json`, `bandit` comes from
+`requirements.txt`, and the build fails rather than producing an image whose
+detectors are missing. `git` is included so `docker run ... -m security.cli
+/repo --history` works against a mounted clone.
+
+**Extension:** load `src/apps/extension/` and set the backend URL in the popup.
+A non-localhost backend must be `https://` and triggers a one-time permission
+prompt for that host — the manifest cannot know your deployment's hostname at
+build time, so it is requested at runtime instead.
+
+**Dashboard:** deploy `src/apps/dashboard/app.py` to Streamlit Community Cloud
+and set `BACKEND_URL`. Add its origin to `ALLOWED_ORIGINS` on the API; the
+extension does not need to be listed, because its service worker holds an
+explicit host permission and is not a CORS caller.
+
+### Sizing
+
+A scan holds every submitted file in memory and forks bandit and eslint over a
+temp copy of the tree, so `fly.toml` asks for 1 GB — the 256 MB default is not
+enough for a large repository. Throughput is fine on a shared CPU: 330 files
+takes about 3 seconds, because each analyzer runs once over the whole tree
+rather than per file. The slowest part of a scan is usually OSV, which needs one
+request per vulnerability; those are fetched concurrently.
+
+### CI
+
+`.github/workflows/ci.yml` runs lint → compile → tests, then **scans this
+repository with its own scanner** (`--history --fail-on high`) and builds and
+verifies the Docker image. Deployment is gated on both. The self-scan needs
+`fetch-depth: 0`, since a depth-1 clone has no history to scan.
+
+You can gate your own repositories the same way:
+
+```yaml
+- run: python -m security.cli . --history --fail-on high
+  env:
+    PYTHONPATH: src
+```

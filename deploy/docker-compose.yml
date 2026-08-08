@@ -27,10 +27,13 @@ services:
       LLM_BACKEND: ${LLM_BACKEND:-auto}
       # host.docker.internal reaches an Ollama/llama.cpp server on the host.
       LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
-      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen2.5-coder:7b}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen2.5-coder:3b}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-codex}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Detection is deterministic; triage is the only part that needs a model.
+      SECURITY_TRIAGE: ${SECURITY_TRIAGE:-true}
+      SECURITY_OFFLINE: ${SECURITY_OFFLINE:-false}
     depends_on:
       db:
         condition: service_healthy
