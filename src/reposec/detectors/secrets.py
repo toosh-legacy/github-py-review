@@ -51,6 +51,20 @@ _PLACEHOLDER_SHAPE_RE = re.compile(
 # Lines that read as documentation of the *format*, not a live value.
 _ANNOTATION_RE = re.compile(r"(?i)\b(e\.g\.|for example|replace with|see docs)\b")
 
+# Prose and documentation. A high-entropy string next to `SECRET_KEY` in a
+# tutorial is almost always showing you what one looks like — Flask's own docs
+# repeat the same 64-character example three times, and every scanner that
+# treats it as a leak trains its users to ignore secret findings.
+#
+# This *downgrades* rather than suppresses, and only for the entropy-gated
+# rules. A `ghp_…` or `AKIA…` in documentation is still a live provider
+# credential and stays exactly where it was.
+_DOC_FILE_RE = re.compile(
+    r"(?i)(^|/)(docs?|documentation|examples?|samples?)/|\.(md|rst|adoc|txt)$"
+)
+
+_DOWNGRADE = {"high": "medium", "medium": "low", "low": "low"}
+
 
 def _is_placeholder(secret: str, line: str) -> bool:
     low = secret.lower()
@@ -77,7 +91,9 @@ def scan_file(path: str, content: str) -> list[SecurityFinding]:
     if not is_scannable(path) or looks_binary(content) or not content.strip():
         return []
 
-    is_example = bool(_EXAMPLE_FILE_RE.search(path.replace("\\", "/")))
+    normalised = path.replace("\\", "/")
+    is_example = bool(_EXAMPLE_FILE_RE.search(normalised))
+    is_docs = bool(_DOC_FILE_RE.search(normalised))
     lines = content.splitlines()
     findings: list[SecurityFinding] = []
     # One finding per (rule, line): a rule matching twice on one line is one
@@ -98,6 +114,21 @@ def scan_file(path: str, content: str) -> list[SecurityFinding]:
                 continue
 
             seen.add((rule.id, line_no))
+
+            severity = rule.severity
+            explanation = rule.explanation
+            # Only the entropy-gated rules are downgraded in documentation. A
+            # provider-fingerprinted token is a live credential wherever it sits.
+            if is_docs and rule.min_entropy:
+                severity = _DOWNGRADE[severity]
+                explanation = (
+                    explanation
+                    + "\n\nRanked lower because this is a documentation file, "
+                    "where a high-entropy value next to a secret-looking name "
+                    "is usually an illustration. Confirm it is not a real "
+                    "credential before dismissing it."
+                )
+
             findings.append(
                 SecurityFinding(
                     id=finding_id("secret", rule.id, path, line_no),
@@ -111,10 +142,10 @@ def scan_file(path: str, content: str) -> list[SecurityFinding]:
                     line_start=line_no,
                     line_end=line_no,
                     detector_severity=rule.severity,  # type: ignore[arg-type]
-                    severity=rule.severity,  # type: ignore[arg-type]
+                    severity=severity,  # type: ignore[arg-type]
                     evidence=redact(secret),
                     references=list(rule.references),
-                    explanation=rule.explanation,
+                    explanation=explanation,
                     suggested_fix=rule.remediation,
                 )
             )

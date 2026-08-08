@@ -140,3 +140,42 @@ def test_scrub_masks_credentials_in_text_from_other_detectors():
 def test_scrub_leaves_ordinary_code_alone():
     code = 'def add(a, b):\n    return a + b  # api_key_header = "x-api-key"\n'
     assert scrub(code) == code
+
+
+# --------------------------------------------------------------------------- #
+# Documentation: downgraded, never silenced
+#
+# Found by scanning Flask, whose docs repeat the same 64-character SECRET_KEY
+# example three times. Reporting those as a leak is how a scanner teaches its
+# users to ignore secret findings.
+# --------------------------------------------------------------------------- #
+def test_entropy_findings_in_docs_are_downgraded_not_dropped():
+    content = f'SECRET_KEY = "{HIGH_ENTROPY}"'
+    findings = scan_file("docs/config.rst", content)
+    assert findings, "a docs finding must still be reported"
+    assert findings[0].severity == "low"
+    # The detector's own opinion is preserved for audit.
+    assert findings[0].detector_severity == "medium"
+    assert "documentation file" in findings[0].explanation
+
+
+def test_a_provider_token_in_docs_keeps_its_severity():
+    # A real GitHub PAT is a live credential wherever it sits. Only the
+    # entropy-gated rules get the documentation discount.
+    findings = scan_file("docs/guide.md", f'token = "{GITHUB_PAT}"')
+    assert [f.severity for f in findings] == ["high"]
+    assert "documentation file" not in findings[0].explanation
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["docs/a.rst", "doc/a.md", "documentation/a.txt", "examples/x.md", "README.md"],
+)
+def test_documentation_paths_are_recognised(path):
+    findings = scan_file(path, f'API_KEY = "{HIGH_ENTROPY}"')
+    assert findings and findings[0].severity == "low"
+
+
+def test_ordinary_source_is_not_downgraded():
+    findings = scan_file("app/config.py", f'API_KEY = "{HIGH_ENTROPY}"')
+    assert findings and findings[0].severity == "medium"
