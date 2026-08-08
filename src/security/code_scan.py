@@ -42,10 +42,18 @@ _ESLINT_ASSETS = Path(__file__).resolve().parent / "eslint"
 # is pinned explicitly.
 _DECODE = {"encoding": "utf-8", "errors": "replace"}
 
-# B101 (assert_used) fires on every test file in every Python repo and is not
-# what anyone means by "unsafe code pattern". Everything else bandit reports is
-# security-relevant by construction.
-_BANDIT_SKIP = {"B101"}
+# Three bandit checks fire on ubiquitous, *correct* code and drown the findings
+# that matter. Each is a prompt to go review something, not a finding:
+#   B101 assert_used                      every test file in every Python repo
+#   B603 subprocess_without_shell_equals_true
+#                                         fires on `subprocess.run([...])` — the
+#                                         recommended safe form
+#   B607 start_process_with_partial_path  fires on `run(["git", ...])`; absolute
+#                                         paths only matter in setuid contexts
+# The real subprocess risk is shell=True with interpolation, and B602/B605/B609
+# still catch that. Everything else bandit reports is security-relevant by
+# construction, so the skip list stays this short deliberately.
+_BANDIT_SKIP = {"B101", "B603", "B607"}
 
 _BANDIT_SEVERITY = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
 

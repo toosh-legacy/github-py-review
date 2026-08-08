@@ -1,0 +1,16 @@
+# BENCHMARK FIXTURE — versions pinned to known-vulnerable releases on purpose.
+# Scored against a frozen OSV snapshot (osv_snapshot.json), not live osv.dev, so
+# the benchmark number does not drift when new advisories are published.
+
+# planted: each of these has published advisories at this version
+requests==2.19.0
+flask==0.12.2
+pyyaml==5.1
+idna==3.10        # included after the snapshot showed it is affected too
+
+# decoy: no advisories in the snapshot, must contribute no findings
+certifi==2024.12.14
+
+# decoy: an unpinned range. The detector must report it as unresolved rather
+# than guess a version — checking the wrong version is worse than not checking.
+urllib3>=1.26

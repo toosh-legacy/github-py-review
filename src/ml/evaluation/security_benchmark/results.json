@@ -1,0 +1,43 @@
+{
+  "detection": {
+    "secrets": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "caught": 6,
+      "missed": 0,
+      "false_positives": 0
+    },
+    "dependencies": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "caught": 4,
+      "missed": 0,
+      "false_positives": 0
+    },
+    "code": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "caught": 11,
+      "missed": 0,
+      "false_positives": 0
+    },
+    "overall": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "caught": 21,
+      "missed": 0,
+      "false_positives": 0
+    }
+  },
+  "degraded": [
+    "dependency: 1 unpinned requirement(s) skipped (urllib3\u2026) \u2014 commit a lockfile to include them"
+  ],
+  "missed": [],
+  "false_positives": [],
+  "notes": [],
+  "latency_ms": 1186
+}

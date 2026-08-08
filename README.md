@@ -211,7 +211,41 @@ gets its inputs and the popup says the scan was partial.
 Set the backend URL (default `http://localhost:8001`) and an optional GitHub
 token (raises the API rate limit, needed for any sizeable repo) in the popup.
 
-## Evaluation harness
+## Security benchmark
+
+```bash
+python src/ml/evaluation/run_security_eval.py            # detectors only
+python src/ml/evaluation/run_security_eval.py --triage   # + the LLM stage
+```
+
+Scores the scanner against a labelled fixture repo. Current result:
+
+| Detector | Precision | Recall | F1 |
+|---|---|---|---|
+| Secrets | 1.00 | 1.00 | 1.00 |
+| Dependencies | 1.00 | 1.00 | 1.00 |
+| Code | 1.00 | 1.00 | 1.00 |
+| **Overall** | **1.00** | **1.00** | **1.00** |
+
+**Precision is the number that matters.** Half the fixture is decoys — AWS's own
+documented sample key, `${TEMPLATE}` values, parameter-bound SQL that looks like
+concatenation, `yaml.safe_load`, `execFile` with an argument array, the word
+`eval` inside a string literal, an `.env.example`, a vendored `node_modules`
+tree. A scanner that fires on everything scores perfect recall and is worthless,
+so recall alone proves nothing.
+
+Dependencies are scored against a frozen OSV snapshot
+(`security_benchmark/snapshot_osv.py` regenerates it), because scoring against
+live OSV means a new advisory upstream is indistinguishable from a regression here.
+
+**What this does and does not prove.** The fixture was written alongside the
+scanner, so a perfect score means "no regression", not "solved" — real-world
+precision is a question only real repositories can answer. It has already earned
+its keep: building it surfaced three bandit rules (`B101`, `B603`, `B607`) that
+fire on ubiquitous *correct* code, and dropping them is why the code detector
+reaches 1.00. `tests/test_security_benchmark.py` enforces the floors in CI.
+
+## Code-review evaluation harness
 
 ```bash
 python src/ml/evaluation/run_eval.py

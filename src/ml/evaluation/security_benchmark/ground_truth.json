@@ -1,0 +1,75 @@
+{
+  "_readme": [
+    "Ground truth for the security benchmark. Two halves, and the second is the",
+    "one that matters: `planted` findings measure recall, `decoys` measure",
+    "precision. A scanner that fires on everything scores perfect recall, so",
+    "recall alone proves nothing.",
+    "",
+    "A planted entry is matched by (file, category) with the line within",
+    "`line_tolerance`. `rule_any` lists acceptable rule ids where more than one",
+    "detector legitimately catches the same thing; omit it to accept any rule.",
+    "",
+    "A decoy is a location that must produce NO finding of that category. Each",
+    "one is a real false-positive mode observed in actual secret scanners and",
+    "linters, not an invented edge case."
+  ],
+  "line_tolerance": 2,
+
+  "planted": [
+    {"file": "conf/settings.py", "line": 9,  "category": "secret", "rule_any": ["aws-access-key-id"], "expect_severity": "high", "why": "live AWS key id"},
+    {"file": "conf/settings.py", "line": 10, "category": "secret", "rule_any": ["aws-secret-access-key", "generic-api-key"], "expect_severity": "high", "why": "AWS secret access key"},
+    {"file": "conf/settings.py", "line": 11, "category": "secret", "rule_any": ["github-pat"], "expect_severity": "high", "why": "GitHub PAT"},
+    {"file": "conf/settings.py", "line": 12, "category": "secret", "rule_any": ["stripe-secret-key"], "expect_severity": "high", "why": "live Stripe key"},
+    {"file": "conf/settings.py", "line": 13, "category": "secret", "rule_any": ["database-connection-string"], "expect_severity": "high", "why": "DB URL with password"},
+    {"file": "conf/settings.py", "line": 14, "category": "secret", "rule_any": ["hardcoded-crypto-key", "generic-api-key"], "expect_severity": "high", "why": "JWT signing key"},
+
+    {"file": "app/storage.py", "line": 16, "category": "code", "rule_any": ["B608"], "expect_severity": "medium", "why": "SQL built by concatenation"},
+    {"file": "app/storage.py", "line": 21, "category": "code", "rule_any": ["B301"], "expect_severity": "medium", "why": "pickle.loads on untrusted input"},
+    {"file": "app/storage.py", "line": 25, "category": "code", "rule_any": ["B506"], "expect_severity": "medium", "why": "yaml.load without SafeLoader"},
+    {"file": "app/storage.py", "line": 29, "category": "code", "rule_any": ["B307"], "expect_severity": "medium", "why": "eval on caller input"},
+    {"file": "app/storage.py", "line": 33, "category": "code", "rule_any": ["B324"], "expect_severity": "medium", "why": "md5 for integrity"},
+    {"file": "app/storage.py", "line": 37, "category": "code", "rule_any": ["B602", "B605"], "expect_severity": "high", "why": "shell=True with concatenation"},
+
+    {"file": "web/render.js", "line": 9,  "category": "code", "rule_any": ["js-innerhtml"], "expect_severity": "medium", "why": "innerHTML XSS sink"},
+    {"file": "web/render.js", "line": 10, "category": "code", "rule_any": ["security/detect-eval-with-expression", "js-eval"], "expect_severity": "high", "why": "eval in JS"},
+    {"file": "web/render.js", "line": 14, "category": "code", "rule_any": ["security/detect-child-process", "js-child-process-exec"], "expect_severity": "high", "why": "shell command by concatenation"},
+    {"file": "web/render.js", "line": 18, "category": "code", "rule_any": ["js-insecure-cipher"], "expect_severity": "high", "why": "createCipher, broken KDF + fixed IV"},
+    {"file": "web/render.js", "line": 22, "category": "code", "rule_any": ["js-node-serialize"], "expect_severity": "high", "why": "unserialize executes payload functions"}
+  ],
+
+  "decoys": [
+    {"file": "conf/settings.py", "line": 18, "category": "secret", "why": "AWS's own documented sample key (AKIAIOSFODNN7EXAMPLE)"},
+    {"file": "conf/settings.py", "line": 20, "category": "secret", "why": "${VAULT_CLIENT_SECRET} is a template, not a value"},
+    {"file": "conf/settings.py", "line": 22, "category": "secret", "why": "<your-api-key-here> placeholder"},
+    {"file": "conf/settings.py", "line": 24, "category": "secret", "why": "low-entropy header name assigned to an api_key-ish variable"},
+    {"file": "conf/settings.py", "line": 26, "category": "secret", "why": "repeated-character filler"},
+    {"file": "conf/settings.py", "line": 28, "category": "secret", "why": "read from the environment, as it should be"},
+    {"file": "conf/settings.py", "line": 30, "category": "secret", "why": "DB URL with a username but no password"},
+
+    {"file": "app/storage.py", "line": 43, "category": "code", "why": "parameter-bound SQL"},
+    {"file": "app/storage.py", "line": 48, "category": "code", "why": "json.loads instead of pickle"},
+    {"file": "app/storage.py", "line": 52, "category": "code", "why": "yaml.safe_load"},
+    {"file": "app/storage.py", "line": 57, "category": "code", "why": "sha256, not a broken hash"},
+    {"file": "app/storage.py", "line": 62, "category": "code", "why": "argument list, no shell"},
+    {"file": "app/storage.py", "line": 67, "category": "code", "why": "the word eval inside a string literal"},
+
+    {"file": "web/render.js", "line": 28, "category": "code", "why": "textContent, not innerHTML"},
+    {"file": "web/render.js", "line": 33, "category": "code", "why": "execFile with an argument array"},
+    {"file": "web/render.js", "line": 38, "category": "code", "why": "createCipheriv with a random IV"},
+    {"file": "web/render.js", "line": 42, "category": "code", "why": "JSON.parse"},
+    {"file": "web/render.js", "line": 47, "category": "code", "why": "the word eval inside a string literal"}
+  ],
+
+  "decoy_files": [
+    {"file": ".env.example", "why": "example files document credential shape; flagging them is the classic noise source"},
+    {"file": "node_modules/leftpad/index.js", "why": "vendored third-party code the user cannot fix"}
+  ],
+
+  "dependencies": {
+    "_note": "Scored against osv_snapshot.json, not live OSV, so the number does not drift when new advisories land.",
+    "vulnerable_packages": ["requests", "flask", "pyyaml", "idna"],
+    "clean_packages": ["certifi"],
+    "unresolved_packages": ["urllib3"],
+    "must_include_cves": ["CVE-2018-18074", "CVE-2020-14343"]
+  }
+}
