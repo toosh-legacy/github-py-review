@@ -7,7 +7,7 @@ primary_region = "iad"
 
 [build]
   # Run `fly deploy` from the repo root; the build context is that root.
-  dockerfile = "infra/Dockerfile"
+  dockerfile = "deploy/Dockerfile"
 
 [env]
   ALLOWED_ORIGINS = "https://github.com"

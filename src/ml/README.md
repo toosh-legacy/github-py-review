@@ -19,8 +19,8 @@ matches serving.
 ## The pipeline
 
 ```
-curate_dataset.py  → ml/data/{train,val}.jsonl   (CPU, runs anywhere)
-train_lora.py      → ml/adapters/roundN/         (GPU: QLoRA)
+curate_dataset.py  → src/ml/data/{train,val}.jsonl   (CPU, runs anywhere)
+train_lora.py      → src/ml/adapters/roundN/         (GPU: QLoRA)
 evaluate_model.py  → recall / FP-rate / F1 on val       (GPU or via a server)
 export_to_gguf.py  → merged model → GGUF → Ollama       (CPU ok)
 iterate.py         → runs the above in rounds, stops at the plateau
@@ -29,28 +29,28 @@ iterate.py         → runs the above in rounds, stops at the plateau
 ## Quick start (on a GPU box, from the repo root)
 
 ```bash
-pip install -r ml/requirements-train.txt
+pip install -r src/ml/requirements-train.txt
 # 1. Build a labeled dataset from any tree of good Python:
-python ml/curate_dataset.py --src /path/to/good/repos --out ml/data --max 8000
+python src/ml/curate_dataset.py --src /path/to/good/repos --out src/ml/data --max 8000
 # 2. Fine-tune once...
-python ml/train_lora.py --data ml/data --out ml/adapters/round1
+python src/ml/train_lora.py --data src/ml/data --out src/ml/adapters/round1
 # 3. ...or fine-tune repeatedly until improvement flattens (the bottleneck):
-python ml/iterate.py --data ml/data --out ml/adapters \
+python src/ml/iterate.py --data src/ml/data --out src/ml/adapters \
     --max-rounds 6 --min-gain 0.01 --patience 2
 ```
 
 `iterate.py` escalates effort each round (more epochs, then more LoRA rank),
 scores F1 on the held-out val split, and **stops when `patience` rounds in a row
 fail to gain `min-gain` F1** — that's the "keep fine-tuning until a bottleneck"
-loop. The curve is written to `ml/adapters/iterations.json`.
+loop. The curve is written to `src/ml/adapters/iterations.json`.
 
 ## Serve the winner on your CPU
 
 ```bash
-python ml/export_to_gguf.py --base Qwen/Qwen2.5-Coder-3B-Instruct \
-    --adapter ml/adapters/round3 --out ml/merged \
+python src/ml/export_to_gguf.py --base Qwen/Qwen2.5-Coder-3B-Instruct \
+    --adapter src/ml/adapters/round3 --out src/ml/merged \
     --llama-cpp /path/to/llama.cpp --quant Q4_K_M
-ollama create codereview-qwen -f ml/Modelfile
+ollama create codereview-qwen -f src/ml/Modelfile
 ```
 Then in `.env`: `LLM_BACKEND=local` and `LOCAL_LLM_MODEL=codereview-qwen`.
 Restart the backend — `/debug/file` now runs your fine-tuned model. No code change.
@@ -60,7 +60,7 @@ Restart the backend — `/debug/file` now runs your fine-tuned model. No code ch
 `evaluate_model.py` scores the val split (recall = planted bugs caught,
 FP-rate = clean files falsely flagged, F1). To compare the base vs the tuned
 model against the *project* benchmark instead, point the backend at each in turn
-(`LOCAL_LLM_MODEL=...`) and run `python evaluation/run_eval.py`.
+(`LOCAL_LLM_MODEL=...`) and run `python src/ml/evaluation/run_eval.py`.
 
 ## Honest limits
 

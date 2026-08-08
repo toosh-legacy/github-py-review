@@ -10,7 +10,7 @@ Tabs:
   2. History     — browse past reviews and open any one's full report.
   3. Evaluation  — the benchmark table + charts from the eval harness.
 
-Run:  streamlit run apps/dashboard/app.py
+Run:  streamlit run src/apps/dashboard/app.py
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import requests
 import streamlit as st
 
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "http://localhost:8001").rstrip("/")
-RESULTS = Path(__file__).parent.parent.parent / "evaluation" / "results.json"
+RESULTS = Path(__file__).parents[2] / "ml" / "evaluation" / "results.json"
 
 _SEV_COLOR = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 _SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -221,4 +221,4 @@ with eval_tab:
             ]
         )
     else:
-        st.info("Run `python evaluation/run_eval.py` to generate results.json.")
+        st.info("Run `python src/ml/evaluation/run_eval.py` to generate results.json.")

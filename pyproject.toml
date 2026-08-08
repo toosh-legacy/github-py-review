@@ -12,7 +12,7 @@ ignore = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Import roots: the app packages live in src/ (`import backend`, `import agent`,
-# ...); "." lets tests import the ml/ training package (`import ml.curate_dataset`).
-pythonpath = ["src", "."]
+# Single import root: every package lives under src/ — `import backend`,
+# `import agent`, `import ml.curate_dataset`, ...
+pythonpath = ["src"]
 addopts = "-q"

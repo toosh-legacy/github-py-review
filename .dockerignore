@@ -1,0 +1,13 @@
+# The API image only needs the service packages under src/. Everything below is
+# dev/train/UI surface that would bloat the image (and its build cache).
+.git
+.github
+.venv
+_archive
+docs
+tests
+deploy
+**/__pycache__
+*.sqlite3
+src/ml
+src/apps

@@ -5,15 +5,15 @@ Each round trains a LoRA adapter with a bit more capacity/effort than the last
 F1 to the best so far. When `patience` consecutive rounds fail to gain at least
 `min_gain` F1, we've hit diminishing returns and stop — that's the bottleneck
 you asked to fine-tune up to. The full improvement curve is written to
-ml/iterations.json.
+src/ml/iterations.json.
 
 Run on a GPU box (from the repo root):
-    pip install -r ml/requirements-train.txt
-    python ml/curate_dataset.py --src <good-code-dir> --out ml/data
-    python ml/iterate.py --data ml/data --out ml/adapters \
+    pip install -r src/ml/requirements-train.txt
+    python src/ml/curate_dataset.py --src <good-code-dir> --out src/ml/data
+    python src/ml/iterate.py --data src/ml/data --out src/ml/adapters \
         --max-rounds 6 --min-gain 0.01 --patience 2
 
-Serving the winning adapter on your CPU: export it (ml/export_to_gguf.py)
+Serving the winning adapter on your CPU: export it (src/ml/export_to_gguf.py)
 and point LOCAL_LLM_MODEL at it.
 """
 from __future__ import annotations
@@ -112,8 +112,8 @@ def _print_curve(history: list[dict], best_round: int) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base-model", default=TrainConfig.base_model)
-    ap.add_argument("--data", default="ml/data")
-    ap.add_argument("--out", default="ml/adapters")
+    ap.add_argument("--data", default="src/ml/data")
+    ap.add_argument("--out", default="src/ml/adapters")
     ap.add_argument("--max-rounds", type=int, default=6)
     ap.add_argument("--min-gain", type=float, default=0.01)
     ap.add_argument("--patience", type=int, default=2)

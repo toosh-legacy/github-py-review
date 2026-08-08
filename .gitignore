@@ -12,10 +12,10 @@ venv/
 chroma/
 
 # Training artifacts (datasets, adapters, merged/GGUF models, run curves)
-ml/data/
-ml/adapters/
-ml/merged/
-ml/iterations.json
+src/ml/data/
+src/ml/adapters/
+src/ml/merged/
+src/ml/iterations.json
 *.gguf
 
 # OS / editor

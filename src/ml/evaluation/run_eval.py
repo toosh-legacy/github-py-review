@@ -5,7 +5,7 @@ the real bugs (recall), how often it fires on clean PRs (false-positive rate),
 plus avg tokens and p95 latency. Writes `results.json` next to this file and
 prints a table for the README / Streamlit "Evaluation results" tab.
 
-    PYTHONPATH=src python evaluation/run_eval.py   # from the repo root
+    python src/ml/evaluation/run_eval.py   # from the repo root
 
 Runs the agent in-process. With no reviewer configured it falls back to the mock,
 which fires on every change — so the false-positive rate is only meaningful once
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE.parent / "src"))  # the Python packages live in src/
+sys.path.insert(0, str(HERE.parents[1]))  # the Python packages live in src/
 
 from agent.graph import run_review_graph  # noqa: E402
 

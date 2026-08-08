@@ -14,7 +14,7 @@ applied to source text (line numbers preserved) and kept only if the result
 still parses — the bug is semantic, not a syntax error.
 
 Usage:
-    python ml/curate_dataset.py --src . --out ml/data --max 4000
+    python src/ml/curate_dataset.py --src . --out src/ml/data --max 4000
 
 Stdlib only, so it runs anywhere (no GPU / ML deps needed).
 """
@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # The Python packages live in src/; add it so this runs as a script.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from llm_model.prompts import DEBUG_SYSTEM_PROMPT, DEBUG_USER_PROMPT  # noqa: E402
 
@@ -227,7 +227,7 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--src", default=".", help="Directory of good Python source")
-    ap.add_argument("--out", default="ml/data", help="Output directory")
+    ap.add_argument("--out", default="src/ml/data", help="Output directory")
     ap.add_argument("--max", type=int, default=4000, help="Max examples")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()

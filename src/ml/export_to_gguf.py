@@ -8,12 +8,12 @@ Pipeline:
     3. register it with Ollama via the generated Modelfile            -- printed
 
 After that, serve on CPU with no code change:
-    ollama create codereview-qwen -f ml/Modelfile
+    ollama create codereview-qwen -f src/ml/Modelfile
     # then in .env:  LLM_BACKEND=local  LOCAL_LLM_MODEL=codereview-qwen
 
 Usage (GPU box for step 1; CPU is fine for 2-3):
-    python ml/export_to_gguf.py --base Qwen/Qwen2.5-Coder-3B-Instruct \
-        --adapter ml/adapters/round3 --out ml/merged \
+    python src/ml/export_to_gguf.py --base Qwen/Qwen2.5-Coder-3B-Instruct \
+        --adapter src/ml/adapters/round3 --out src/ml/merged \
         --llama-cpp /path/to/llama.cpp --quant Q4_K_M
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ def to_gguf(merged_dir: str, llama_cpp: str, quant: str) -> str:
     return str(quantized)
 
 
-def write_modelfile(gguf_path: str, path: str = "ml/Modelfile") -> None:
+def write_modelfile(gguf_path: str, path: str = "src/ml/Modelfile") -> None:
     Path(path).write_text(
         f"FROM {gguf_path}\n"
         "PARAMETER temperature 0\n"
@@ -72,7 +72,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base", required=True, help="Base model id/path")
     ap.add_argument("--adapter", required=True, help="LoRA adapter dir")
-    ap.add_argument("--out", default="ml/merged", help="Merged model dir")
+    ap.add_argument("--out", default="src/ml/merged", help="Merged model dir")
     ap.add_argument("--llama-cpp", default=None, help="Path to a llama.cpp checkout")
     ap.add_argument("--quant", default="Q4_K_M", help="GGUF quant type")
     args = ap.parse_args()
@@ -84,7 +84,7 @@ def main() -> None:
         gguf = to_gguf(merged, args.llama_cpp, args.quant)
         write_modelfile(gguf)
         print(f"GGUF written to {gguf}; Modelfile updated.")
-        print("Next:  ollama create codereview-qwen -f ml/Modelfile")
+        print("Next:  ollama create codereview-qwen -f src/ml/Modelfile")
     else:
         print(
             "Skipped GGUF conversion (no --llama-cpp). To finish on any machine:\n"
@@ -93,8 +93,8 @@ def main() -> None:
             f"--outfile {merged}/model-f16.gguf --outtype f16\n"
             f"  llama.cpp/llama-quantize {merged}/model-f16.gguf "
             f"{merged}/codereview-qwen-Q4_K_M.gguf Q4_K_M\n"
-            "  # then set FROM <that gguf> in ml/Modelfile and:\n"
-            "  ollama create codereview-qwen -f ml/Modelfile"
+            "  # then set FROM <that gguf> in src/ml/Modelfile and:\n"
+            "  ollama create codereview-qwen -f src/ml/Modelfile"
         )
 
 
