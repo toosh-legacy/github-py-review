@@ -7,9 +7,10 @@
 # secret scanner: fixtures the detector must fire on, and documentation showing
 # what a finding looks like. They are synthetic and were never issued.
 
-# Detector test fixtures: these are the inputs that prove the rules work.
-tests/test_secrets_scan.py
-tests/test_security_api.py
+# Detector test fixtures: these are the inputs that prove the rules work. Scoped
+# to the whole suite rather than named files, because any new detector test will
+# need a credential-shaped fixture too.
+tests/**
 src/ml/evaluation/security_benchmark/**
 
 # Documentation examples (README curl samples, the guide's walkthrough).
