@@ -157,3 +157,30 @@ test("aggregate dedupes and sorts like the CLI", () => {
   assert.equal(report.findings[0].severity, "high");
   assert.match(report.summary, /2 findings/);
 });
+
+// --------------------------------------------------------------------------- //
+// Documentation handling must match `detectors/secrets.py`. The two
+// implementations drifted here once already — the browser reported Flask's doc
+// examples at full severity while the CLI downgraded them.
+// --------------------------------------------------------------------------- //
+const HIGH_ENTROPY = "hQ7zRt3XmW9pLd2Vb" + "N6cKfJ8sYaG4uEo";
+const DOC_PAT = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+
+test("entropy findings in docs are downgraded, not dropped", () => {
+  const found = scanFileForSecrets("docs/config.rst", `SECRET_KEY = "${HIGH_ENTROPY}"`);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].severity, "low");
+  assert.equal(found[0].detector_severity, "medium");
+  assert.match(found[0].explanation, /documentation file/);
+});
+
+test("a provider token in docs keeps its severity", () => {
+  const found = scanFileForSecrets("docs/guide.md", `token = "${DOC_PAT}"`);
+  assert.equal(found[0].severity, "high");
+  assert.doesNotMatch(found[0].explanation, /documentation file/);
+});
+
+test("ordinary source is not downgraded", () => {
+  const found = scanFileForSecrets("app/config.py", `API_KEY = "${HIGH_ENTROPY}"`);
+  assert.equal(found[0].severity, "medium");
+});

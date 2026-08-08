@@ -35,8 +35,11 @@ const FILENAMES = new Set([
 const EXTENSIONS = new Set([
   "py", "pyi", "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts",
   "json", "yml", "yaml", "toml", "ini", "cfg", "conf", "properties",
-  "env", "sh", "bash", "zsh", "ps1", "tf", "tfvars", "hcl",
-  "txt", "md", "xml", "gradle", "rb", "php", "java", "go", "rs",
+  "env", "sh", "bash", "zsh", "ps1", "bat", "tf", "tfvars", "hcl",
+  "txt", "md", "rst", "adoc", "xml", "gradle", "rb", "php", "java",
+  "go", "rs", "kt", "kts", "swift", "cs", "c", "h", "cpp", "hpp",
+  "scala", "clj", "ex", "exs", "erl", "lua", "pl", "r", "dart",
+  "vue", "svelte", "astro", "ipynb",
   "pem", "key", "crt", "sql",
 ]);
 

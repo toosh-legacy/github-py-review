@@ -76,6 +76,14 @@ const PLACEHOLDER_TOKENS = [
 const PLACEHOLDER_SHAPE_RE = /(\$\{[^}]*\}|\{\{[^}]*\}\}|<[^>]{2,}>|%\([a-z_]+\)s|\$[A-Z_]{3,})/;
 const ANNOTATION_RE = /\b(e\.g\.|for example|replace with|see docs)\b/i;
 
+// Prose and documentation. A high-entropy string next to `SECRET_KEY` in a
+// tutorial is almost always showing you what one looks like — Flask's own docs
+// repeat the same 64-character example three times. Downgrades rather than
+// suppresses, and only for the entropy-gated rules: a `ghp_…` in documentation
+// is still a live credential. Mirrors `detectors/secrets.py`.
+const DOC_FILE_RE = /(^|\/)(docs?|documentation|examples?|samples?)\/|\.(md|rst|adoc|txt)$/i;
+const DOWNGRADE = { high: "medium", medium: "low", low: "low" };
+
 export function isPlaceholder(secret, line) {
   const low = secret.toLowerCase();
   if (PLACEHOLDER_TOKENS.some((t) => low.includes(t))) return true;
@@ -93,6 +101,7 @@ export function scanFileForSecrets(path, content) {
   if (!isScannable(path) || !content.trim() || content.includes("\0")) return [];
 
   const isExample = EXAMPLE_FILE_RE.test(path);
+  const isDocs = DOC_FILE_RE.test(path);
   const lines = content.split("\n");
   const findings = [];
   const seen = new Set();
@@ -115,6 +124,17 @@ export function scanFileForSecrets(path, content) {
       if (rule.minEntropy && shannonEntropy(secret) < rule.minEntropy) continue;
 
       seen.add(key);
+
+      let severity = rule.severity;
+      let explanation = rule.explanation;
+      if (isDocs && rule.minEntropy) {
+        severity = DOWNGRADE[severity];
+        explanation +=
+          "\n\nRanked lower because this is a documentation file, where a " +
+          "high-entropy value next to a secret-looking name is usually an " +
+          "illustration. Confirm it is not a real credential before dismissing it.";
+      }
+
       findings.push({
         id: `${rule.id}:${path}:${lineNo}`,
         category: "secret",
@@ -123,9 +143,11 @@ export function scanFileForSecrets(path, content) {
         title: rule.title,
         file: path,
         line_start: lineNo,
-        severity: rule.severity,
+        severity,
+        // The detector's own opinion, preserved for audit.
+        detector_severity: rule.severity,
         evidence: redact(secret),
-        explanation: rule.explanation,
+        explanation,
         suggested_fix: rule.remediation,
         references: rule.references,
       });
