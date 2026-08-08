@@ -1,14 +1,18 @@
-"""Streamlit dashboard (spec Layer 2).
+"""Streamlit dashboard.
 
 Open access — no auth. Point BACKEND_URL at your backend (default localhost:8001)
 or set it live in the sidebar.
 
 Tabs:
-  1. Review      — paste a GitHub PR URL or raw diff, run the agent, see findings,
-                   filter by severity, download the report, and (human action)
-                   post the report as a PR comment.
-  2. History     — browse past reviews and open any one's full report.
-  3. Evaluation  — the benchmark table + charts from the eval harness.
+  1. Security    — browse repository scans: findings by category and severity,
+                   the evidence, the reason, and the fix. The primary view.
+  2. Review      — paste a GitHub PR URL or raw diff, run the code-review agent.
+  3. History     — browse past code reviews.
+  4. Evaluation  — the benchmark table + charts from the eval harness.
+
+Severity is rendered as stat tiles with an icon and a label rather than a chart:
+three ordered counts are a job for numbers, and severity is a reserved status
+scale that must never be carried by colour alone.
 
 Run:  streamlit run src/apps/dashboard/app.py
 """
@@ -27,7 +31,7 @@ RESULTS = Path(__file__).parents[2] / "ml" / "evaluation" / "results.json"
 _SEV_COLOR = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 _SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
 
-st.set_page_config(page_title="AI Code Review Copilot", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Repo Security Scanner", page_icon="🛡️", layout="wide")
 
 
 # --------------------------------------------------------------------------- #
@@ -46,7 +50,11 @@ with st.sidebar:
     backend = st.text_input("Backend URL", value=DEFAULT_BACKEND).rstrip("/")
     health = _health(backend)
     if health:
-        st.success(f"Backend online · LLM mode: **{health.get('llm_mode', '?')}**")
+        triage = "on" if health.get("security_triage") else "off"
+        st.success(
+            f"Backend online · LLM mode: **{health.get('llm_mode', '?')}** · "
+            f"triage **{triage}**"
+        )
     else:
         st.error("Backend unreachable")
     if st.button("🔄 Refresh"):
@@ -54,10 +62,10 @@ with st.sidebar:
     st.caption("Open access — no authentication.")
 
 
-st.title("🤖 AI Code Review Copilot")
+st.title("🛡️ Repo Security Scanner")
 
-review_tab, history_tab, eval_tab = st.tabs(
-    ["Review a PR", "History", "Evaluation results"]
+security_tab, review_tab, history_tab, eval_tab = st.tabs(
+    ["Security scans", "Review a PR", "Review history", "Evaluation results"]
 )
 
 
@@ -111,7 +119,143 @@ def _render_report(report: dict, *, review_id: int | None = None) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Tab 1 — Review
+# Tab 1 — Security scans (the primary view)
+# --------------------------------------------------------------------------- #
+_CAT_LABEL = {
+    "secret": "🔑 Secret",
+    "dependency": "📦 Dependency",
+    "code": "⚠️ Code",
+}
+_EXPLOIT_LABEL = {
+    "direct": "directly exploitable",
+    "conditional": "exploitable given a precondition",
+    "theoretical": "no plausible path here",
+}
+
+
+def _render_security_report(report: dict, *, scan_id: int | None = None) -> None:
+    findings = report.get("findings", [])
+    sev = report.get("counts_by_severity", {})
+    cat = report.get("counts_by_category", {})
+
+    st.write(f"**{report.get('summary', '')}**")
+
+    # Stat tiles, not a chart: three ordered counts are numbers, and severity is
+    # a status scale that has to carry an icon and a label, never colour alone.
+    cols = st.columns(6)
+    cols[0].metric("Findings", len(findings))
+    cols[1].metric("🔴 High", sev.get("high", 0))
+    cols[2].metric("🟠 Medium", sev.get("medium", 0))
+    cols[3].metric("🟡 Low", sev.get("low", 0))
+    cols[4].metric("Files scanned", report.get("scanned_files", 0))
+    cols[5].metric("Suppressed", report.get("suppressed", 0))
+
+    # A detector that could not run is never presented as a clean result.
+    for note in report.get("degraded", []):
+        st.warning(note, icon="⚠️")
+
+    if not findings:
+        st.success("No security findings. 🎉")
+        return
+
+    # Filters in one row above the content.
+    left, right = st.columns(2)
+    categories = left.multiselect(
+        "Category",
+        options=[c for c in _CAT_LABEL if cat.get(c)],
+        default=[c for c in _CAT_LABEL if cat.get(c)],
+        format_func=lambda c: f"{_CAT_LABEL[c]} ({cat.get(c, 0)})",
+        key=f"cat-{scan_id}",
+    )
+    severities = right.multiselect(
+        "Severity",
+        options=list(_SEV_COLOR),
+        default=list(_SEV_COLOR),
+        format_func=lambda s: f"{_SEV_COLOR[s]} {s} ({sev.get(s, 0)})",
+        key=f"sev-{scan_id}",
+    )
+
+    shown = [
+        f
+        for f in findings
+        if f.get("category") in categories and f.get("severity") in severities
+    ]
+    shown.sort(key=lambda f: _SEV_ORDER.get(f.get("severity"), 9))
+
+    st.caption(f"Showing {len(shown)} of {len(findings)} findings.")
+    for f in shown:
+        badge = _SEV_COLOR.get(f.get("severity"), "⚪")
+        where = f["file"] if not f.get("line_start") else f"{f['file']}:{f['line_start']}"
+        label = _CAT_LABEL.get(f.get("category"), f.get("category", "?"))
+        with st.expander(f"{badge} {f['severity'].upper()} · {label} — {where}"):
+            st.markdown(f"**{f.get('title', '')}**")
+            st.caption(
+                f"`{f.get('rule_id', '')}` via `{f.get('detector', '')}`"
+                + (
+                    f" · {_EXPLOIT_LABEL.get(f['exploitability'], f['exploitability'])}"
+                    if f.get("exploitability")
+                    else ""
+                )
+                + ("" if f.get("triaged") else " · not triaged")
+            )
+            if f.get("evidence"):
+                st.code(f["evidence"], language=None)
+            if f.get("explanation"):
+                st.write(f["explanation"])
+            if f.get("suggested_fix"):
+                st.info(f["suggested_fix"], icon="🛠️")
+            if f.get("merged_from"):
+                st.caption(f"{len(f['merged_from'])} duplicate finding(s) merged in.")
+            for url in f.get("references", [])[:3]:
+                st.caption(url)
+
+    st.download_button(
+        "⬇️ Download report (JSON)",
+        data=json.dumps(report, indent=2),
+        file_name=f"security-scan-{scan_id or 'report'}.json",
+        mime="application/json",
+        key=f"dl-sec-{scan_id}",
+    )
+
+
+with security_tab:
+    st.caption(
+        "Scans are started from the Chrome extension (a repository page → "
+        "**🛡️ Security scan**) or the CLI (`python -m security.cli .`). This view "
+        "reads what they stored."
+    )
+    try:
+        resp = requests.get(f"{backend}/security/scans", timeout=10)
+        scans = resp.json() if resp.status_code < 400 else []
+    except requests.RequestException as exc:
+        scans = []
+        st.error(f"Backend unreachable: {exc}")
+
+    if not scans:
+        st.info("No scans yet.")
+    else:
+        options = {
+            f"#{s['id']} · {s.get('repo') or 'unknown repo'}"
+            f"{'@' + s['ref'] if s.get('ref') else ''} · "
+            f"{s['finding_count']} finding(s) · {s['created_at'][:19]}": s["id"]
+            for s in scans
+        }
+        picked = st.selectbox("Scan", list(options))
+        try:
+            detail = requests.get(
+                f"{backend}/security/scans/{options[picked]}", timeout=30
+            )
+            if detail.status_code >= 400:
+                st.error(detail.json().get("error", {}).get("message", detail.text))
+            else:
+                record = detail.json()
+                _render_security_report(record["report"], scan_id=record["id"])
+        except requests.RequestException as exc:
+            st.error(f"Backend unreachable: {exc}")
+
+
+# --------------------------------------------------------------------------- #
+# Tab 2 — Review
 # --------------------------------------------------------------------------- #
 with review_tab:
     mode = st.radio("Input", ["PR URL", "Raw diff"], horizontal=True)
@@ -161,7 +305,7 @@ with review_tab:
 
 
 # --------------------------------------------------------------------------- #
-# Tab 2 — History
+# Tab 3 — Review history
 # --------------------------------------------------------------------------- #
 with history_tab:
     st.subheader("Recent reviews")
@@ -191,7 +335,7 @@ with history_tab:
 
 
 # --------------------------------------------------------------------------- #
-# Tab 3 — Evaluation
+# Tab 4 — Evaluation
 # --------------------------------------------------------------------------- #
 with eval_tab:
     st.subheader("Benchmark results")
