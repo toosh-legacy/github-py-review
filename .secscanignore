@@ -20,5 +20,9 @@ README.md:github-pat
 src/security/rules.py
 
 # docker-compose ships throwaway local-dev Postgres credentials on purpose;
-# they are not reachable outside the compose network.
+# they are not reachable outside the compose network. The two older paths are
+# where the same file lived before the layout was flattened — `--history` finds
+# it under the name it had at the time, not the one it has now.
 deploy/docker-compose.yml:database-connection-string
+infra/docker-compose.yml:database-connection-string
+docker-compose.yml:database-connection-string

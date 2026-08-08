@@ -125,6 +125,30 @@ Without it, JS/TS falls back to a narrower set of regex checks and every scan
 says so in its `degraded` list — a detector that could not run is never reported
 as a clean result.
 
+## Command line
+
+The extension covers the working tree. The CLI covers everything it can't —
+notably git history, which would need one API request per blob to reconstruct
+remotely, and which the server deliberately never fetches.
+
+```bash
+PYTHONPATH=src python -m security.cli .                 # working tree
+PYTHONPATH=src python -m security.cli . --history       # + git history
+PYTHONPATH=src python -m security.cli . --format json   # machine-readable
+PYTHONPATH=src python -m security.cli . --fail-on high  # exit 1 for CI
+```
+
+**Why `--history` matters:** a credential committed and later deleted is still
+in the repository. Anyone who clones it can read it, and unless it was rotated
+it is still live — which is exactly the situation secret scanning exists for. A
+working-tree scan cannot see any of them.
+
+Findings name the commit, author and date that introduced the secret, because
+"live for two years" and "added yesterday" call for different responses. One
+credential committed, reverted, and re-added is reported once, anchored to the
+earliest commit — that is how long it has been exposed. History findings carry
+no line number: a line in an old diff maps to nothing in the checked-out file.
+
 ### Suppressing known findings
 
 Real repositories contain credential-shaped strings that exist on purpose —
