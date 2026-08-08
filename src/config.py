@@ -66,6 +66,19 @@ class Settings(BaseSettings):
     max_diff_bytes: int = Field(default=200_000, alias="MAX_DIFF_BYTES")
     max_files: int = Field(default=50, alias="MAX_FILES")
 
+    # --- Security scanner ---------------------------------------------------
+    # Detection is deterministic (regex/entropy, OSV, bandit, eslint). The LLM
+    # only deduplicates, ranks, explains, and suggests fixes — turn it off and
+    # the scan still works, with the rule-authored explanations instead.
+    security_triage: bool = Field(default=True, alias="SECURITY_TRIAGE")
+    # Skip the OSV lookup entirely (air-gapped runs). The dependency detector
+    # then reports itself as degraded rather than returning a false all-clear.
+    security_offline: bool = Field(default=False, alias="SECURITY_OFFLINE")
+    # A repo scan submits whole files, so the caps are larger than the diff
+    # caps but still bounded — the extension can otherwise post a monorepo.
+    max_scan_files: int = Field(default=2_000, alias="MAX_SCAN_FILES")
+    max_scan_bytes: int = Field(default=20_000_000, alias="MAX_SCAN_BYTES")
+
     @property
     def allowed_origins_list(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]

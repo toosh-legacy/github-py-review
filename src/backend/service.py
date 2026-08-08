@@ -1,8 +1,8 @@
-"""Review orchestration + persistence.
+"""Scan/review orchestration + persistence.
 
-Sits between the HTTP routes and the agent: resolves the diff, enforces the
+Sits between the HTTP routes and the agents: resolves the input, enforces the
 size guardrails, runs the graph, and stores the result. The only place that
-touches both the agent and the database.
+touches both an agent and the database.
 """
 from __future__ import annotations
 
@@ -10,18 +10,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agent.diff_utils import parse_unified_diff
-from agent.graph import run_debug_file, run_review_graph
+from agent.graph import run_review_graph
 from config import settings
-from database.models import Review
+from database.models import Review, SecurityScan
 from github_client.diff import fetch_diff_from_url
 from schemas import (
-    DebugFileRequest,
     Report,
     ReviewRecord,
     ReviewRequest,
     ReviewSummary,
-    ScanRepoRequest,
-    ScanRepoResponse,
+    SecurityReport,
+    SecurityScanRecord,
+    SecurityScanRequest,
+    SecurityScanSummary,
 )
 
 from .errors import APIError
@@ -82,49 +83,87 @@ def create_review(db: Session, request: ReviewRequest) -> ReviewRecord:
     return _to_record(row)
 
 
-def _guard_content(content: str) -> None:
-    if len(content.encode("utf-8")) > settings.max_diff_bytes:
+def _guard_scan(request: SecurityScanRequest) -> None:
+    """Bound a repo scan before any tool runs.
+
+    The extension posts whole file contents, so an unbounded request is both a
+    memory problem and a way to make the backend do a monorepo's worth of
+    subprocess work on someone else's behalf.
+    """
+    if len(request.files) > settings.max_scan_files:
         raise APIError(
             413,
-            "file_too_large",
-            f"file exceeds MAX_DIFF_BYTES ({settings.max_diff_bytes} bytes)",
+            "too_many_files",
+            f"scan submitted {len(request.files)} files "
+            f"(MAX_SCAN_FILES={settings.max_scan_files})",
+        )
+    total = sum(len(f.content.encode("utf-8", "replace")) for f in request.files)
+    if total > settings.max_scan_bytes:
+        raise APIError(
+            413,
+            "scan_too_large",
+            f"scan payload is {total} bytes (MAX_SCAN_BYTES={settings.max_scan_bytes})",
         )
 
 
-def debug_file(db: Session, request: DebugFileRequest) -> ReviewRecord:
-    """Debug one whole file (repo-scan flow) and persist it as a review.
+def _to_scan_record(row: SecurityScan) -> SecurityScanRecord:
+    return SecurityScanRecord(
+        id=row.id,
+        repo=row.repo,
+        ref=row.ref,
+        summary=row.summary,
+        finding_count=row.finding_count,
+        created_at=row.created_at,
+        report=SecurityReport.model_validate(row.report),
+    )
 
-    Stored with source="file" and no pr_url — the post-comment path only makes
-    sense for PR-sourced reviews, so a file debug can never be posted.
-    """
-    _guard_content(request.content)
 
-    report = run_debug_file(path=request.path, content=request.content)
+def security_scan(db: Session, request: SecurityScanRequest) -> SecurityScanRecord:
+    """Run the three detectors plus LLM triage over a repo's files, and store it."""
+    from agent.security_graph import run_security_scan
 
-    row = Review(
-        source="file",
-        pr_url=None,
+    _guard_scan(request)
+
+    report = run_security_scan(
+        files=[(f.path, f.content) for f in request.files],
+        repo=request.repo,
+    )
+
+    row = SecurityScan(
+        repo=request.repo,
+        ref=request.ref,
         summary=report.summary,
-        issue_count=len(report.issues),
+        finding_count=len(report.findings),
         report=report.model_dump(),
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return _to_record(row)
+    return _to_scan_record(row)
 
 
-def scan_repo(request: ScanRepoRequest) -> ScanRepoResponse:
-    """Index a repo's Python files for debug context (best-effort RAG).
+def list_security_scans(db: Session, limit: int = 50) -> list[SecurityScanSummary]:
+    rows = db.scalars(
+        select(SecurityScan).order_by(SecurityScan.id.desc()).limit(limit)
+    ).all()
+    return [
+        SecurityScanSummary(
+            id=r.id,
+            repo=r.repo,
+            ref=r.ref,
+            summary=r.summary,
+            finding_count=r.finding_count,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
-    No-op (indexed=0, rag_available=false) when chromadb isn't installed, so
-    the endpoint always succeeds and the caller can degrade gracefully.
-    """
-    from rag.indexer import index_files, rag_available
 
-    pairs = [(f.path, f.content) for f in request.files if f.path.endswith(".py")]
-    indexed = index_files(pairs)
-    return ScanRepoResponse(indexed=indexed, rag_available=rag_available())
+def get_security_scan(db: Session, scan_id: int) -> SecurityScanRecord:
+    row = db.get(SecurityScan, scan_id)
+    if row is None:
+        raise APIError(404, "not_found", f"security scan {scan_id} not found")
+    return _to_scan_record(row)
 
 
 def list_reviews(db: Session, limit: int = 50) -> list[ReviewSummary]:

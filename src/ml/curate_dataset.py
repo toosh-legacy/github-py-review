@@ -8,8 +8,8 @@ that must yield an empty report). We manufacture both from good source files:
   negative  = the original clean function            → {"issues": []}
   positive  = one taxonomy bug injected on one line  → {"issues": [that bug]}
 
-Each example is rendered with the SAME prompts the runtime uses
-(`llm_model.prompts`), so training matches inference exactly. Mutations are
+Each example is rendered with the whole-file prompts in `ml/prompts.py`, so the
+training format is pinned to the trainer rather than to the review server. Mutations are
 applied to source text (line numbers preserved) and kept only if the result
 still parses — the bug is semantic, not a syntax error.
 
@@ -32,7 +32,7 @@ from pathlib import Path
 # The Python packages live in src/; add it so this runs as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from llm_model.prompts import DEBUG_SYSTEM_PROMPT, DEBUG_USER_PROMPT  # noqa: E402
+from ml.prompts import DEBUG_SYSTEM_PROMPT, DEBUG_USER_PROMPT  # noqa: E402
 
 _SKIP_DIRS = {".venv", "_archive", "__pycache__", ".git", "training", "tests"}
 

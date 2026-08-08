@@ -1,4 +1,4 @@
-"""The three worker nodes: static analysis (ruff), LLM review, aggregation.
+"""The code-review worker nodes: static analysis (ruff), LLM review, aggregation.
 
 Kept as plain functions taking and returning ordinary values, so they are
 trivial to unit-test in isolation; `graph.py` wires them into LangGraph.
@@ -46,12 +46,16 @@ def _run_ruff(path: str, content: str) -> list[dict]:
             ],
             input=content,
             capture_output=True,
-            text=True,
+            # Not `text=True`: that decodes with the platform default (cp1252 on
+            # Windows), and one non-ASCII byte in ruff's output kills the reader
+            # thread and yields stdout=None with a zero exit code.
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
-    if not proc.stdout.strip():
+    if not (proc.stdout or "").strip():
         return []
     try:
         return json.loads(proc.stdout)
@@ -59,17 +63,16 @@ def _run_ruff(path: str, content: str) -> list[dict]:
         return []
 
 
-def _issues_for_file(df: DiffFile, *, keep_syntax_errors: bool = False) -> list[Issue]:
+def _issues_for_file(df: DiffFile) -> list[Issue]:
     content, real_lines = df.reconstructed_new_content()
     findings = _run_ruff(df.path, content)
     added = df.added_line_numbers
     issues: list[Issue] = []
     for f in findings:
         code = f.get("code") or ""
-        is_syntax = _is_syntax_error(f)
-        # A syntax error on the diff-only path is usually an artifact of
-        # reconstructing a partial file from hunks; keep it only for whole files.
-        if is_syntax and not keep_syntax_errors:
+        # A syntax error here is usually an artifact of reconstructing a partial
+        # file from diff hunks, not a real defect in the author's file.
+        if _is_syntax_error(f):
             continue
         loc = f.get("location") or {}
         row = loc.get("row")
@@ -88,8 +91,8 @@ def _issues_for_file(df: DiffFile, *, keep_syntax_errors: bool = False) -> list[
         )
         fix = f.get("fix") or {}
         suggested = fix.get("message", "") if isinstance(fix, dict) else ""
-        label = code or ("E999" if is_syntax else "ruff")
-        severity = "high" if is_syntax else _severity_for(code)
+        label = code or "ruff"
+        severity = _severity_for(code)
         issues.append(
             Issue(
                 file=df.path,
@@ -112,19 +115,6 @@ def run_static_analysis(diff: str) -> list[Issue]:
     return issues
 
 
-def run_static_analysis_on_file(path: str, content: str) -> list[Issue]:
-    """Run ruff over a whole file (repo-scan → debug-one-file path).
-
-    Unlike `run_static_analysis`, there is no diff: every line is in scope, so
-    E999 syntax errors are real defects (not partial-view artifacts) and are
-    kept rather than dropped.
-    """
-    if not path.endswith(".py"):
-        return []
-    df = DiffFile.from_full_file(path, content)
-    return _issues_for_file(df, keep_syntax_errors=True)
-
-
 def llm_review_files(files: list[DiffFile]) -> tuple[list[Issue], int]:
     """Propose issues: run the LLM reviewer over each changed Python file.
 
@@ -140,25 +130,6 @@ def llm_review_files(files: list[DiffFile]) -> tuple[list[Issue], int]:
     tokens = 0
     for df in files:
         file_issues, file_tokens = llm.review_file(df)
-        issues.extend(file_issues)
-        tokens += file_tokens
-    return issues, tokens
-
-
-def llm_debug_files(files: list[DiffFile]) -> tuple[list[Issue], int]:
-    """Propose issues by debugging whole files (repo-scan path).
-
-    Same recall half as `llm_review_files`, but calls `debug_file` (whole-file
-    brief) instead of `review_file` (changed-lines brief). Survivors are still
-    decided by `verify_llm_findings`.
-    """
-    from llm_model.base import get_review_llm
-
-    llm = get_review_llm()
-    issues: list[Issue] = []
-    tokens = 0
-    for df in files:
-        file_issues, file_tokens = llm.debug_file(df)
         issues.extend(file_issues)
         tokens += file_tokens
     return issues, tokens

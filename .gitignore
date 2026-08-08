@@ -27,5 +27,5 @@ src/ml/iterations.json
 .pytest_cache/
 .ruff_cache/
 
-# Pre-restructure copy of the old layout; delete once you're happy.
-_archive/
+# Node (the eslint install for the JS/TS detector)
+node_modules/

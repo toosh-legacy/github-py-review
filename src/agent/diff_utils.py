@@ -28,21 +28,6 @@ class DiffFile:
     path: str
     lines: list[DiffLine] = field(default_factory=list)
 
-    @classmethod
-    def from_full_file(cls, path: str, content: str) -> DiffFile:
-        """Wrap a whole file as a `DiffFile` with every line marked added.
-
-        The reviewer and linter are diff-oriented (they only act on added
-        lines). For the repo-scan → debug-one-file flow there is no diff, so we
-        treat the entire file as new: every line is `added`, which makes the
-        added-line filters downstream no-ops and lets the same code review a
-        complete file.
-        """
-        lines = [
-            DiffLine(real_line=i, text=text, added=True)
-            for i, text in enumerate(content.splitlines(), start=1)
-        ]
-        return cls(path=path, lines=lines)
 
     @property
     def is_python(self) -> bool:

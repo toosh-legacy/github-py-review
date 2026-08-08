@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AI Code Review Copilot",
-  "version": "0.2.0",
-  "description": "Review a GitHub PR, or scan a repo and debug a single file, with the AI Code Review Copilot backend.",
+  "name": "Repo Security Scanner",
+  "version": "0.3.0",
+  "description": "Scan a GitHub repository for exposed secrets, vulnerable dependencies, and unsafe code patterns — detected by real tools, triaged by an LLM.",
   "permissions": ["storage"],
   "host_permissions": [
     "http://localhost:8001/*",
@@ -12,7 +12,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "AI Code Review Copilot"
+    "default_title": "Repo Security Scanner"
   },
   "background": { "service_worker": "background.js" },
   "content_scripts": [
@@ -22,7 +22,7 @@
     },
     {
       "matches": ["https://github.com/*"],
-      "js": ["repo_script.js"]
+      "js": ["security_script.js"]
     }
   ]
 }

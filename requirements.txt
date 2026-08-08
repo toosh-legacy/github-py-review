@@ -15,6 +15,14 @@ langgraph==0.2.60
 openai==1.59.6          # also the transport for local OpenAI-compatible servers
 ruff==0.8.6             # the static-analysis node, and the project's linter
 
+# --- Security detectors ---
+bandit==1.8.0           # unsafe-code detector for Python (code_scan.py)
+# The JS/TS half needs Node: run `npm install` in src/security/eslint/ to enable
+# eslint-plugin-security. Without it the scanner falls back to regex checks and
+# reports the detector as degraded.
+# Secrets and dependencies need no extra packages: the rules are in
+# security/rules.py and OSV is queried over HTTP with httpx.
+
 # --- Streamlit demo ---
 streamlit==1.41.1
 requests==2.32.3
@@ -22,7 +30,3 @@ requests==2.32.3
 # --- Tests / load test ---
 pytest==8.3.4
 locust==2.32.5
-
-# Optional / heavy — lazily imported, so the app runs fine without them:
-#   chromadb==0.5.23   RAG index (rag/)
-#   mcp==1.2.0         MCP server entrypoint (mcp_server/server.py)

@@ -11,3 +11,6 @@ deploy
 *.sqlite3
 src/ml
 src/apps
+# The image has no Node runtime, so the eslint install would be dead weight —
+# the JS detector degrades to its pattern rules and reports that it did.
+src/security/eslint/node_modules

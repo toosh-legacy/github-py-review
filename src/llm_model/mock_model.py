@@ -12,9 +12,6 @@ class MockReviewLLM:
     def review_file(self, df: DiffFile) -> tuple[list[Issue], int]:
         return self._stub(df, "this change")
 
-    def debug_file(self, df: DiffFile) -> tuple[list[Issue], int]:
-        return self._stub(df, "this file")
-
     @staticmethod
     def _stub(df: DiffFile, subject: str) -> tuple[list[Issue], int]:
         added = sorted(df.added_line_numbers)

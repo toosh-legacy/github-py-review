@@ -14,12 +14,7 @@ from agent.diff_utils import DiffFile
 from config import settings
 from schemas import Issue
 
-from .prompts import (
-    DEBUG_SYSTEM_PROMPT,
-    DEBUG_USER_PROMPT,
-    REVIEW_SYSTEM_PROMPT,
-    REVIEW_USER_PROMPT,
-)
+from .prompts import REVIEW_SYSTEM_PROMPT, REVIEW_USER_PROMPT
 
 VALID_SEVERITY = {"high", "medium", "low"}
 
@@ -27,10 +22,6 @@ VALID_SEVERITY = {"high", "medium", "low"}
 class ReviewLLM(Protocol):
     def review_file(self, df: DiffFile) -> tuple[list[Issue], int]:
         """Return (issues, tokens_used) for one changed file (diff path)."""
-        ...
-
-    def debug_file(self, df: DiffFile) -> tuple[list[Issue], int]:
-        """Return (issues, tokens_used) for one whole file (repo-scan path)."""
         ...
 
 
@@ -110,9 +101,6 @@ class ChatReviewLLM:
 
     def review_file(self, df: DiffFile) -> tuple[list[Issue], int]:
         return self._run(df, REVIEW_SYSTEM_PROMPT, REVIEW_USER_PROMPT)
-
-    def debug_file(self, df: DiffFile) -> tuple[list[Issue], int]:
-        return self._run(df, DEBUG_SYSTEM_PROMPT, DEBUG_USER_PROMPT)
 
     def parse_issues(self, df: DiffFile, data: dict | None) -> list[Issue]:
         if data is None:

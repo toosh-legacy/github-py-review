@@ -35,3 +35,28 @@ class Review(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
+
+
+class SecurityScan(Base):
+    """One completed repository security scan.
+
+    A separate table from `reviews` because it stores a different contract: a
+    `SecurityReport` carries detector provenance and degraded-detector state
+    that a code-review `Report` has no place for. Squeezing both into one JSON
+    column would make every reader guess which shape it got.
+    """
+
+    __tablename__ = "security_scans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # "owner/repo" when the extension knew it; null for ad-hoc uploads.
+    repo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Branch or commit the files came from, for reproducing the scan.
+    ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    finding_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Full SecurityReport JSON.
+    report: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )

@@ -15,6 +15,10 @@ jobs:
           python-version: "3.13"
       - name: Install dependencies
         run: pip install -r requirements.txt
+      # Exercises the real eslint-plugin-security path rather than the fallback.
+      - name: Install eslint-plugin-security
+        run: npm install --no-audit --no-fund
+        working-directory: src/security/eslint
       - name: Lint (ruff)
         run: ruff check .
       - name: Compile check
@@ -23,6 +27,8 @@ jobs:
         run: pytest
         env:
           LLM_BACKEND: mock
+          # Detector tests stub OSV; nothing in CI should depend on osv.dev.
+          SECURITY_OFFLINE: "1"
 
   docker-build:
     runs-on: ubuntu-latest

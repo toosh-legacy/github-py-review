@@ -1,10 +1,11 @@
 """FastAPI application: routes, CORS, error handlers, DB startup.
 
+    POST /security/scan              scan a repo's files for security findings
+    POST /security/scan/full         same, but return the stored record (id + report)
+    GET  /security/scans             list past security scans
+    GET  /security/scans/{id}        full stored security report
     POST /review                     run a review, return the report
     POST /review/full                same, but return the stored record (id + report)
-    POST /debug/file                 debug one whole file, return the report
-    POST /debug/file/full            same, but return the stored record (id + report)
-    POST /scan/repo                  index a repo's files for debug context (RAG)
     GET  /health                     liveness + current LLM mode
     GET  /reviews                    list past reviews
     GET  /reviews/{id}               full stored report
@@ -23,15 +24,16 @@ from sqlalchemy.orm import Session
 from config import settings
 from database.session import get_db, init_db
 from schemas import (
-    DebugFileRequest,
     PostCommentRequest,
     PostCommentResponse,
     Report,
     ReviewRecord,
     ReviewRequest,
     ReviewSummary,
-    ScanRepoRequest,
-    ScanRepoResponse,
+    SecurityReport,
+    SecurityScanRecord,
+    SecurityScanRequest,
+    SecurityScanSummary,
 )
 
 from . import service
@@ -44,7 +46,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="AI Code Review Copilot", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Repo Security Scanner", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,7 +62,43 @@ install_error_handlers(app)
 @app.get("/health")
 def health() -> dict[str, object]:
     # Report the reviewer actually in use (mock | local | openai), not a guess.
-    return {"status": "ok", "llm_mode": settings.active_backend}
+    return {
+        "status": "ok",
+        "llm_mode": settings.active_backend,
+        "security_triage": settings.security_triage,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Security scanning — the primary flow. Detection is done by tools (secret
+# rules, OSV, bandit, eslint-plugin-security); the LLM only triages.
+# --------------------------------------------------------------------------- #
+@app.post("/security/scan", response_model=SecurityReport)
+def security_scan(
+    request: SecurityScanRequest, db: Session = Depends(get_db)
+) -> SecurityReport:
+    """Scan a repository's files for secrets, vulnerable deps, and unsafe code."""
+    return service.security_scan(db, request).report
+
+
+@app.post("/security/scan/full", response_model=SecurityScanRecord)
+def security_scan_full(
+    request: SecurityScanRequest, db: Session = Depends(get_db)
+) -> SecurityScanRecord:
+    """Same as /security/scan but returns the stored record (id + report)."""
+    return service.security_scan(db, request)
+
+
+@app.get("/security/scans", response_model=list[SecurityScanSummary])
+def security_scans(db: Session = Depends(get_db)) -> list[SecurityScanSummary]:
+    return service.list_security_scans(db)
+
+
+@app.get("/security/scans/{scan_id}", response_model=SecurityScanRecord)
+def security_scan_by_id(
+    scan_id: int, db: Session = Depends(get_db)
+) -> SecurityScanRecord:
+    return service.get_security_scan(db, scan_id)
 
 
 @app.post("/review", response_model=Report)
@@ -77,26 +115,6 @@ def review_full(request: ReviewRequest, db: Session = Depends(get_db)) -> Review
     later call the post-comment route.
     """
     return service.create_review(db, request)
-
-
-@app.post("/debug/file", response_model=Report)
-def debug_file(request: DebugFileRequest, db: Session = Depends(get_db)) -> Report:
-    """Debug one whole file (repo-scan → pick-a-file flow). Returns the report."""
-    return service.debug_file(db, request).report
-
-
-@app.post("/debug/file/full", response_model=ReviewRecord)
-def debug_file_full(
-    request: DebugFileRequest, db: Session = Depends(get_db)
-) -> ReviewRecord:
-    """Same as /debug/file but returns the stored record (id + report)."""
-    return service.debug_file(db, request)
-
-
-@app.post("/scan/repo", response_model=ScanRepoResponse)
-def scan_repo(request: ScanRepoRequest) -> ScanRepoResponse:
-    """Index a repo's Python files for debug context (best-effort RAG)."""
-    return service.scan_repo(request)
 
 
 @app.get("/reviews", response_model=list[ReviewSummary])

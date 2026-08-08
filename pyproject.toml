@@ -3,7 +3,7 @@
 
 [tool.ruff]
 line-length = 90
-exclude = [".venv", "_archive"]
+exclude = [".venv", "node_modules"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
