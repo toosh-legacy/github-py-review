@@ -138,8 +138,15 @@ export function scanFileForSecrets(path, content) {
 // Detector 2 — dependencies, via OSV
 // ---------------------------------------------------------------------------
 const EXACT_NPM = /^\d+\.\d+\.\d+$/;
-const REQ_LINE = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*==\s*([A-Za-z0-9][\w.!+-]*)/;
-const REQ_UNPINNED = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*[<>~!^]/;
+// Extras (`requests[socks]==2.31.0`) are stripped with a separate pass rather
+// than matched inline. Inlining them needs `(?:\[[^\]]*\])?` — a quantifier
+// inside an optional group — which backtracks badly on a crafted line, and a
+// requirements.txt from an arbitrary repository is exactly the attacker-
+// controlled input that reaches here. eslint-plugin-security caught this in the
+// original expression, running under this scanner.
+const EXTRAS = /\[[^\]]*\]/;
+const REQ_LINE = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*([A-Za-z0-9][\w.!+-]*)/;
+const REQ_UNPINNED = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*[<>~!^]/;
 
 export function parseManifests(files) {
   const packages = [];
@@ -154,7 +161,7 @@ export function parseManifests(files) {
 
     if (/(^|\/)(requirements[\w.-]*\.txt|constraints[\w.-]*\.txt)$/.test(path)) {
       for (const raw of content.split("\n")) {
-        const line = raw.split("#")[0].trim();
+        const line = raw.split("#")[0].trim().replace(EXTRAS, "");
         if (!line || line.startsWith("-")) continue;
         const m = REQ_LINE.exec(line);
         if (m) packages.push({ name: m[1].toLowerCase(), version: m[2], ecosystem: "PyPI", manifest: path });

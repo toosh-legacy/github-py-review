@@ -23,13 +23,18 @@ from .common import finding_id, is_vendored
 from .osv import OSVUnavailable, Package, fetch_details, query_batch
 
 _PY_MANIFESTS = re.compile(r"(^|/)(requirements[\w.-]*\.txt|constraints[\w.-]*\.txt)$")
+# Extras (`requests[socks]==2.31.0`) are stripped with a separate pass rather
+# than matched inline. Inlining them needs `(?:\[[^\]]*\])?` — a quantifier
+# inside an optional group — which backtracks badly on a crafted line, and a
+# requirements.txt from an arbitrary repository is exactly the attacker-
+# controlled input that reaches here. eslint-plugin-security caught this in the
+# JS port of this same expression, running under this scanner.
+_EXTRAS = re.compile(r"\[[^\]]*\]")
 _REQ_LINE = re.compile(
-    r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*==\s*([A-Za-z0-9][\w.!+-]*)"
+    r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*([A-Za-z0-9][\w.!+-]*)"
 )
 # A dependency spec that names a version but not exactly (>=, ~=, ^, *, ranges).
-_REQ_UNPINNED = re.compile(
-    r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*[<>~!^]"
-)
+_REQ_UNPINNED = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*[<>~!^]")
 
 _EXACT_NPM = re.compile(r"^\d+\.\d+\.\d+")
 
@@ -46,7 +51,7 @@ class Manifests:
 def _parse_requirements(path: str, content: str) -> Manifests:
     pkgs, unpinned = [], []
     for i, raw in enumerate(content.splitlines(), start=1):
-        line = raw.split("#", 1)[0].strip()
+        line = _EXTRAS.sub("", raw.split("#", 1)[0].strip())
         if not line or line.startswith("-"):
             continue  # -r includes, -e editable installs, --index-url, ...
         m = _REQ_LINE.match(line)
@@ -70,6 +75,7 @@ def _parse_pyproject(path: str, content: str) -> Manifests:
     pkgs, unpinned = [], []
 
     def take(spec: str) -> None:
+        spec = _EXTRAS.sub("", spec)
         m = _REQ_LINE.match(spec)
         if m:
             pkgs.append(Package(m.group(1).lower(), m.group(2), "PyPI", path))

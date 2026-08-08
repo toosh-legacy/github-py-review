@@ -13,27 +13,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+      - name: Install
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -e .
       # Exercises the real eslint-plugin-security path rather than the fallback.
       - name: Install eslint-plugin-security
         run: npm install --no-audit --no-fund
-        working-directory: src/security/eslint
-      - name: Lint (ruff)
+        working-directory: src/reposec/detectors/eslint
+      - name: Lint
         run: ruff check .
       - name: Compile check
         run: python -m compileall -q src
-      - name: Tests
+      - name: Python tests
         run: pytest
         env:
           LLM_BACKEND: mock
-          # Detector tests stub OSV; nothing in CI should depend on osv.dev.
+          # The detector tests stub OSV; nothing in CI should depend on osv.dev.
           SECURITY_OFFLINE: "1"
+      # The browser scanner is a second implementation of the secret rules, so
+      # it is scored against the same benchmark the Python one is.
+      - name: JS parity tests
+        run: node --test tests/js/parity.test.mjs
+      - name: Generated JS rules are in sync with rules.py
+        run: |
+          python deploy/generate_js_rules.py
+          git diff --exit-code src/apps/extension/rules.generated.js \
+            || (echo "::error::rules.generated.js is stale - run python deploy/generate_js_rules.py" && exit 1)
 
   self-scan:
     # Dogfooding: the scanner runs on its own repository and blocks the build on
-    # a high-severity finding. .secscanignore covers the detector's own test
-    # fixtures, so a failure here is a real leak, not a fixture.
+    # a high-severity finding. .secscanignore covers the detector's own fixtures,
+    # so a failure here is a real leak, not a fixture.
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -44,46 +55,41 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          pip install -e .
       - name: Install eslint-plugin-security
         run: npm install --no-audit --no-fund
-        working-directory: src/security/eslint
+        working-directory: src/reposec/detectors/eslint
+      # Deliberately without --strict: pyproject.toml declares ranges for pip
+      # while requirements.txt pins exactly, so the dependency detector always
+      # reports those ranges as unresolved. That is accurate, not a failure.
       - name: Scan this repository (working tree + git history)
-        run: python -m security.cli . --history --fail-on high --no-color
+        run: reposec scan . --history --fail-on high --no-color
         env:
-          PYTHONPATH: src
           LLM_BACKEND: mock
+      # Findings land in the Security tab rather than only in this log.
+      - name: Re-scan for SARIF
+        if: always()
+        run: reposec scan . --history --format sarif > reposec.sarif
+        env:
+          LLM_BACKEND: mock
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: reposec.sarif
+          category: reposec
 
-  docker-build:
+  image:
     runs-on: ubuntu-latest
     needs: test
     steps:
       - uses: actions/checkout@v4
-      - name: Build backend image
-        run: docker build -f deploy/Dockerfile -t repo-security-scanner:ci .
-      # The image is only useful if its detectors are actually present; the
-      # Dockerfile asserts this at build time, and this re-checks at run time.
-      - name: Verify the detectors survived the build
-        run: |
-          docker run --rm repo-security-scanner:ci \
-            python -c "import sys; sys.path.insert(0, '/app/src'); \
-            from security.code_scan import _eslint_binary, _run_bandit; \
-            assert _eslint_binary(), 'eslint missing'; \
-            import shutil; assert shutil.which('node'), 'node missing'; \
-            print('detectors present in image')"
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: [self-scan, docker-build]
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-      # Deployment is gated on main and on a clean self-scan. Wire up your
-      # platform here, e.g.:
-      #   - uses: superfly/flyctl-actions/setup-flyctl@master
-      #   - run: flyctl deploy --remote-only
-      #     env:
-      #       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      - name: Deploy placeholder
-        run: echo "Configure Fly.io/Railway deploy here (needs platform secrets)."
+      - name: Build
+        run: docker build -f deploy/Dockerfile -t reposec:ci .
+      # The image is only useful if its detectors are present. The Dockerfile
+      # asserts that at build time; this proves it can actually scan.
+      - name: The image can scan
+        run: docker run --rm -v "$PWD:/repo:ro" reposec:ci scan /repo --fail-on high --no-color

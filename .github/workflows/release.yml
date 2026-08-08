@@ -1,7 +1,9 @@
 name: Release
 
-# Builds and publishes the artifacts for a tagged version. CI (ci.yml) still
-# gates correctness; this workflow only runs on a tag that already passed it.
+# Builds and publishes the artifacts for a tagged version. CI (ci.yml) gates
+# correctness on every push; this re-runs the gates anyway, because a tag is not
+# a promise that the tree was green, and publishing a broken scanner is worse
+# than publishing nothing.
 on:
   push:
     tags: ["v*"]
@@ -12,8 +14,6 @@ permissions:
 
 jobs:
   verify:
-    # A tag is not a promise that the tree was green — re-run the gates, because
-    # publishing a broken scanner is worse than publishing nothing.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,18 +22,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install -r requirements-dev.txt
+      - name: Install
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -e .
       - run: npm install --no-audit --no-fund
-        working-directory: src/security/eslint
+        working-directory: src/reposec/detectors/eslint
       - run: ruff check .
       - run: pytest
         env:
           LLM_BACKEND: mock
           SECURITY_OFFLINE: "1"
+      - run: node --test tests/js/parity.test.mjs
       - name: Self-scan
-        run: python -m security.cli . --history --fail-on high --no-color
+        run: reposec scan . --history --fail-on high --no-color
         env:
-          PYTHONPATH: src
           LLM_BACKEND: mock
       - name: Version matches the tag
         run: |
@@ -53,6 +56,23 @@ jobs:
               sys.exit("version mismatch:\n  " + "\n  ".join(problems))
           print(f"version {tag} is consistent")
           PY
+
+  pypi:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Trusted publishing: no long-lived PyPI token to leak, which is exactly
+      # the kind of finding this project exists to report.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
 
   image:
     needs: verify
@@ -81,7 +101,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install pillow
       # The packager validates the manifest against the store's rules, so a
       # rejection surfaces here rather than after a multi-day review.
       - run: python deploy/package_extension.py
@@ -91,7 +110,7 @@ jobs:
           path: dist/*.zip
 
   publish:
-    needs: [image, extension]
+    needs: [pypi, image, extension]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,4 +124,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.zip \
             --title "$GITHUB_REF_NAME" \
-            --notes "See CHANGELOG.md. The extension zip must still be uploaded to the Chrome Web Store by hand — see docs/RELEASE.md."
+            --notes "See CHANGELOG.md. The extension zip must still be uploaded to the Chrome Web Store by hand - see docs/RELEASE.md."

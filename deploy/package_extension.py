@@ -2,7 +2,7 @@
 
     python deploy/package_extension.py
 
-Writes `dist/repo-security-scanner-<version>.zip` containing only the files the
+Writes `dist/reposec-extension-<version>.zip` containing only the files the
 extension actually needs. The store rejects uploads with unreferenced or
 oversized junk, and shipping a whole source directory would also mean shipping
 whatever a developer happened to leave in it.
