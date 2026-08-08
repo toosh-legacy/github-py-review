@@ -1,0 +1,108 @@
+name: Release
+
+# Builds and publishes the artifacts for a tagged version. CI (ci.yml) still
+# gates correctness; this workflow only runs on a tag that already passed it.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  verify:
+    # A tag is not a promise that the tree was green — re-run the gates, because
+    # publishing a broken scanner is worse than publishing nothing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-dev.txt
+      - run: npm install --no-audit --no-fund
+        working-directory: src/security/eslint
+      - run: ruff check .
+      - run: pytest
+        env:
+          LLM_BACKEND: mock
+          SECURITY_OFFLINE: "1"
+      - name: Self-scan
+        run: python -m security.cli . --history --fail-on high --no-color
+        env:
+          PYTHONPATH: src
+          LLM_BACKEND: mock
+      - name: Version matches the tag
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, sys, tomllib
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          manifest = json.loads(
+              pathlib.Path("src/apps/extension/manifest.json").read_text()
+          )
+          problems = []
+          if pyproject["project"]["version"] != tag:
+              problems.append(f"pyproject {pyproject['project']['version']} != tag {tag}")
+          if manifest["version"] != tag:
+              problems.append(f"manifest {manifest['version']} != tag {tag}")
+          if problems:
+              sys.exit("version mismatch:\n  " + "\n  ".join(problems))
+          print(f"version {tag} is consistent")
+          PY
+
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest
+
+  extension:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pillow
+      # The packager validates the manifest against the store's rules, so a
+      # rejection surfaces here rather than after a multi-day review.
+      - run: python deploy/package_extension.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chrome-extension
+          path: dist/*.zip
+
+  publish:
+    needs: [image, extension]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: chrome-extension
+          path: dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --title "$GITHUB_REF_NAME" \
+            --notes "See CHANGELOG.md. The extension zip must still be uploaded to the Chrome Web Store by hand — see docs/RELEASE.md."

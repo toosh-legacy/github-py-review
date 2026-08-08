@@ -328,6 +328,34 @@ You can gate your own repositories the same way:
     PYTHONPATH: src
 ```
 
+## Releasing
+
+Three artifacts ship independently — the API image, the Chrome extension, and
+the dashboard. See [`docs/RELEASE.md`](docs/RELEASE.md) for the checklist.
+
+```bash
+python deploy/package_extension.py   # validates the manifest, writes dist/
+git tag -a v1.0.0 -m "v1.0.0" && git push --tags
+```
+
+Tagging runs `.github/workflows/release.yml`: it re-runs the gates, checks the
+tag matches `pyproject.toml` and the extension manifest, pushes the image to
+GHCR, and attaches the extension zip to a GitHub release. The Web Store upload
+is deliberately manual — it needs a human for the listing and the permission
+justifications.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The short version: a new detector rule
+needs a planted case *and* a decoy, because precision is the binding constraint.
+
+## Security
+
+To report a vulnerability in the scanner, see [`SECURITY.md`](SECURITY.md) —
+which also documents what the scanner does with your code (short answer: with no
+LLM configured, nothing leaves your machine except package names and versions
+sent to OSV, and `SECURITY_OFFLINE=1` stops that too).
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).

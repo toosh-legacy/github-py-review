@@ -20,3 +20,4 @@ venv/
 
 # Node (the eslint install for the JS/TS detector)
 node_modules/
+dist/

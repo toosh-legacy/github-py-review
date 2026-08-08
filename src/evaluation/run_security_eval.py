@@ -232,8 +232,12 @@ def score_triage_lift(before, after) -> dict:
         "merged_by_the_model": merged_after - merged_before,
         "reranked": sum(
             1
+            # strict=False: triage merges duplicates, so `after` is legitimately
+            # shorter. The id guard below is what keeps the pairing honest.
             for b, a in zip(
-                sorted(before, key=lambda f: f.id), sorted(after, key=lambda f: f.id)
+                sorted(before, key=lambda f: f.id),
+                sorted(after, key=lambda f: f.id),
+                strict=False,
             )
             if b.id == a.id and b.severity != a.severity
         ),

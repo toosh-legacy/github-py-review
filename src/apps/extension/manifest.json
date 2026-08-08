@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Repo Security Scanner",
-  "version": "0.3.0",
-  "description": "Scan a GitHub repository for exposed secrets, vulnerable dependencies, and unsafe code patterns \u2014 detected by real tools, triaged by an LLM.",
+  "version": "1.0.0",
+  "description": "Scan a GitHub repo for exposed secrets, vulnerable dependencies and unsafe code \u2014 found by real tools, triaged by an LLM.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": [
     "storage"
   ],
@@ -17,7 +23,13 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Repo Security Scanner"
+    "default_title": "Repo Security Scanner",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"

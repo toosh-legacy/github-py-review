@@ -1,5 +1,35 @@
-# Tooling config only — the project is run from source, not installed.
-# Dependencies live in requirements.txt.
+# Project metadata + tooling config. The service is run from source (uvicorn,
+# `python -m security.cli`), not pip-installed, so dependencies live in
+# requirements.txt rather than here — pinning them in one place keeps the
+# dependency detector's self-scan meaningful.
+
+[project]
+name = "repo-security-scanner"
+version = "1.0.0"
+description = "Scan a repository for exposed secrets, vulnerable dependencies, and unsafe code patterns — found by tools, triaged by an LLM."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tushaar Sood", email = "tushsood@gmail.com" }]
+keywords = [
+    "security",
+    "sast",
+    "secret-scanning",
+    "dependency-scanning",
+    "osv",
+    "bandit",
+    "eslint",
+    "langgraph",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
 
 [tool.ruff]
 line-length = 90
@@ -13,6 +43,6 @@ ignore = ["B008"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Single import root: every package lives under src/ — `import backend`,
-# `import agent`, `import ml.curate_dataset`, ...
+# `import security.triage`, `import agent.security_graph`, ...
 pythonpath = ["src"]
 addopts = "-q"

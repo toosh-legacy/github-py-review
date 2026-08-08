@@ -69,7 +69,10 @@ def query_batch(
             resp = client.post(f"{OSV_API}/v1/querybatch", json=payload)
             resp.raise_for_status()
             results = resp.json().get("results", [])
-            for pkg, entry in zip(batch, results):
+            # strict=False on purpose: OSV returns results positionally, and a
+            # short list means the API misbehaved. Truncating loses coverage for
+            # the tail of the batch, but raising would lose the whole scan.
+            for pkg, entry in zip(batch, results, strict=False):
                 ids = [v["id"] for v in (entry or {}).get("vulns", []) if v.get("id")]
                 if ids:
                     result[pkg] = ids
