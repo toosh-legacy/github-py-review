@@ -20,6 +20,9 @@
 
   // Exact filenames worth scanning regardless of extension.
   const FILENAMES = new Set([
+    // The repo's own suppression rules — the backend reads them out of the
+    // payload, so they have to be sent like any other file.
+    ".secscanignore",
     "dockerfile", "docker-compose.yml", "docker-compose.yaml", "makefile",
     "procfile", "package.json", "package-lock.json", "yarn.lock",
     "pnpm-lock.yaml", "pipfile", "pipfile.lock", "pyproject.toml",

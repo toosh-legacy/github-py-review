@@ -1,7 +1,8 @@
 """The LangGraph security-scan agent.
 
     START → collect_files → scan_secrets → scan_dependencies → scan_code
-          → redact_findings → triage_findings → aggregate → END
+          → suppress_findings → redact_findings → triage_findings
+          → aggregate → END
 
 The three scan nodes are the detection layer and contain no model calls at all —
 they are regex/entropy rules, manifest parsing against the OSV database, and two
@@ -29,6 +30,7 @@ class SecurityState(TypedDict, total=False):
     files: list[tuple[str, str]]
     findings: list[SecurityFinding]
     degraded: list[str]
+    suppressed: int
     scanned_files: int
     skipped_files: int
     tokens_used: int
@@ -47,6 +49,7 @@ def _collect(state: SecurityState) -> SecurityState:
         "files": keep,
         "findings": [],
         "degraded": [],
+        "suppressed": 0,
         "tokens_used": 0,
         "scanned_files": len(keep),
         "skipped_files": len(incoming) - len(keep),
@@ -81,6 +84,19 @@ def _scan_code(state: SecurityState) -> SecurityState:
         "findings": state.get("findings", []) + found,
         "degraded": state.get("degraded", []) + degraded,
     }
+
+
+def _suppress(state: SecurityState) -> SecurityState:
+    """Drop findings the repo's `.secscanignore` marks as known and accepted.
+
+    Runs before triage so the model is never asked to rank findings the user has
+    already dismissed — that would be paying tokens to sort noise.
+    """
+    from security.suppress import apply, load_rules
+
+    rules = load_rules(state.get("files", []))
+    kept, dropped = apply(state.get("findings", []), rules)
+    return {"findings": kept, "suppressed": dropped}
 
 
 def _redact(state: SecurityState) -> SecurityState:
@@ -190,6 +206,7 @@ def build_security_graph():
     g.add_node("scan_secrets", _scan_secrets)
     g.add_node("scan_dependencies", _scan_dependencies)
     g.add_node("scan_code", _scan_code)
+    g.add_node("suppress_findings", _suppress)
     g.add_node("redact_findings", _redact)
     g.add_node("triage_findings", _triage)
     g.add_node("aggregate", _aggregate)
@@ -198,7 +215,8 @@ def build_security_graph():
     g.add_edge("collect_files", "scan_secrets")
     g.add_edge("scan_secrets", "scan_dependencies")
     g.add_edge("scan_dependencies", "scan_code")
-    g.add_edge("scan_code", "redact_findings")
+    g.add_edge("scan_code", "suppress_findings")
+    g.add_edge("suppress_findings", "redact_findings")
     g.add_edge("redact_findings", "triage_findings")
     g.add_edge("triage_findings", "aggregate")
     g.add_edge("aggregate", END)
@@ -221,6 +239,7 @@ def run_security_scan(
         counts_by_severity=final.get("counts_by_severity", {}),
         scanned_files=final.get("scanned_files", 0),
         skipped_files=final.get("skipped_files", 0),
+        suppressed=final.get("suppressed", 0),
         degraded=final.get("degraded", []),
         tokens_used=final.get("tokens_used", 0),
         latency_ms=latency_ms,

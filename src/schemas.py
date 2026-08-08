@@ -128,6 +128,9 @@ class SecurityReport(BaseModel):
     counts_by_severity: dict[str, int] = Field(default_factory=dict)
     scanned_files: int = 0
     skipped_files: int = 0
+    # Findings dropped by .secscanignore. Reported so a suppression file that
+    # silences everything is visible rather than silent.
+    suppressed: int = 0
     # Detectors that could not run (bandit missing, OSV unreachable, ...). Shown
     # to the user: a scan with a dead detector is not a clean scan.
     degraded: list[str] = Field(default_factory=list)

@@ -125,6 +125,25 @@ Without it, JS/TS falls back to a narrower set of regex checks and every scan
 says so in its `degraded` list — a detector that could not run is never reported
 as a clean result.
 
+### Suppressing known findings
+
+Real repositories contain credential-shaped strings that exist on purpose —
+documented example tokens, test fixtures, deliberately vulnerable sample code. A
+`.secscanignore` at the repo root drops them, gitignore-style:
+
+```
+docs/**                   # every finding under docs/
+tests/**:github-pat       # one rule, only under tests/
+:B101                     # one rule, anywhere
+deploy/docker-compose.yml:database-connection-string
+```
+
+Suppressed findings are dropped rather than flagged — a report you have to
+mentally filter is the thing this exists to prevent — but the count is reported
+in `report.suppressed`, so a file that silences everything is visible. This repo
+ships one: the secret detector's own test fixtures would otherwise dominate its
+self-scan.
+
 ### Picking a reviewer
 
 `LLM_BACKEND` selects one (`openai` | `local` | `mock` | `auto`).

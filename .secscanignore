@@ -1,0 +1,24 @@
+# Suppression rules for scanning this repository with its own scanner.
+#
+# Format:  <path glob>[:<rule id>]   — either half may be omitted.
+# Findings matching a rule are dropped from the report entirely.
+#
+# Everything below is a credential-shaped string that exists *because* this is a
+# secret scanner: fixtures the detector must fire on, and documentation showing
+# what a finding looks like. They are synthetic and were never issued.
+
+# Detector test fixtures: these are the inputs that prove the rules work.
+tests/test_secrets_scan.py
+tests/test_security_api.py
+src/ml/evaluation/security_benchmark/**
+
+# Documentation examples (README curl samples, the guide's walkthrough).
+docs/**:github-pat
+README.md:github-pat
+
+# The rule table itself contains example token shapes in its explanations.
+src/security/rules.py
+
+# docker-compose ships throwaway local-dev Postgres credentials on purpose;
+# they are not reachable outside the compose network.
+deploy/docker-compose.yml:database-connection-string
