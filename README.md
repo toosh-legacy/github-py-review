@@ -245,6 +245,26 @@ its keep: building it surfaced three bandit rules (`B101`, `B603`, `B607`) that
 fire on ubiquitous *correct* code, and dropping them is why the code detector
 reaches 1.00. `tests/test_security_benchmark.py` enforces the floors in CI.
 
+### Triage lift is not yet measured
+
+`--triage` reports what the LLM stage changed — how many findings it merged
+beyond the deterministic pass, how many severities it moved, precision@5 before
+and after, and the token cost. **Those numbers do not exist yet**, because no
+model has been configured here; with `LLM_BACKEND=mock` the run honestly reports
+zeroes and says so.
+
+To get the real number, point it at a model and re-run:
+
+```bash
+./deploy/setup_local_model.ps1        # or: export OPENAI_API_KEY=...
+LLM_BACKEND=local python src/ml/evaluation/run_security_eval.py --triage
+```
+
+The triage path itself *is* tested, against a scripted stand-in that reproduces
+how small models actually fail — skipped ids, shouty `"HIGH"` severities,
+invented ids, reciprocal duplicate claims, outright errors. See
+`tests/test_triage.py`.
+
 ## Code-review evaluation harness
 
 ```bash

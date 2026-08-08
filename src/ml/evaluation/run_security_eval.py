@@ -216,6 +216,11 @@ def score_triage_lift(before, after) -> dict:
         hits = sum(1 for f in top if f.severity == "high")
         return hits / len(top)
 
+    # The deterministic pass dedupes in both runs, so the raw merge count is
+    # identical either way. Only the difference is attributable to the model.
+    merged_before = sum(len(f.merged_from) for f in before)
+    merged_after = sum(len(f.merged_from) for f in after)
+
     return {
         "high_severity_before": sum(1 for f in before if f.severity == "high"),
         "high_severity_after": sum(1 for f in after if f.severity == "high"),
@@ -223,8 +228,17 @@ def score_triage_lift(before, after) -> dict:
         "precision_at_5_after": round(p_at_5(after), 4),
         "findings_before": len(before),
         "findings_after": len(after),
-        "merged_by_triage": sum(len(f.merged_from) for f in after),
+        "merged_deterministically": merged_before,
+        "merged_by_the_model": merged_after - merged_before,
+        "reranked": sum(
+            1
+            for b, a in zip(
+                sorted(before, key=lambda f: f.id), sorted(after, key=lambda f: f.id)
+            )
+            if b.id == a.id and b.severity != a.severity
+        ),
         "exploitability_labelled": sum(1 for f in after if f.exploitability),
+        "triaged": sum(1 for f in after if f.triaged),
     }
 
 
@@ -326,15 +340,17 @@ def main() -> None:
         print(f"\nTRIAGE LIFT ({settings.active_backend})")
         print(
             f"  findings      {lift['findings_before']} -> {lift['findings_after']}"
-            f"   ({lift['merged_by_triage']} merged as duplicates)"
+            f"   ({lift['merged_deterministically']} merged by rule, "
+            f"{lift['merged_by_the_model']} more by the model)"
         )
         print(
             f"  precision@5   {lift['precision_at_5_before']:.2f} -> "
             f"{lift['precision_at_5_after']:.2f}"
+            f"   ({lift['reranked']} severities changed)"
         )
         print(
-            f"  exploitability labelled on {lift['exploitability_labelled']}"
-            f"/{lift['findings_after']}"
+            f"  annotated     {lift['triaged']}/{lift['findings_after']} triaged, "
+            f"{lift['exploitability_labelled']} with exploitability"
         )
         print(f"  cost          {lift['tokens_used']} tokens, {lift['latency_ms']} ms")
         if settings.active_backend == "mock":

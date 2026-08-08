@@ -32,8 +32,10 @@ _EXPLOIT_ORDER = {"direct": 0, "conditional": 1, "theoretical": 2, None: 3}
 
 # Ranking a finding needs its neighbours in view, so triage runs in batches
 # rather than one finding at a time. Small local models lose coherence on long
-# lists well before the context window fills.
-BATCH_SIZE = 12
+# lists well before the context window fills — 3B-class models start silently
+# dropping entries somewhere around eight, so the default is deliberately below
+# what a frontier model could handle. Raise it when pointing at a hosted model.
+BATCH_SIZE = 8
 
 # How much of a finding's evidence to hand the model. Secrets are already
 # redacted upstream; this bounds prompt size, not exposure.
@@ -133,9 +135,19 @@ def _apply(
 ) -> list[SecurityFinding] | None:
     """Merge a model reply into `batch`. Returns None if the reply is unusable.
 
-    This is the trust boundary. Only ids present in `batch` are honoured, only
-    the four triage fields are writable, and a reply that would drop findings
-    without accounting for them as duplicates is rejected wholesale.
+    This is the trust boundary, and it is enforced per finding rather than per
+    batch. Only ids present in `batch` are honoured; only the four triage fields
+    are writable; file, line, rule and detector are immutable.
+
+    An id the model simply did not mention is **kept, untriaged** — not dropped.
+    That distinction is what makes the whole thing work on small models: a 3B
+    model handed a dozen findings will routinely return eleven, and an
+    all-or-nothing contract would throw away good triage for the other ten every
+    single time. Losing a finding is unacceptable; losing an *annotation* on one
+    finding is not, and `triaged=False` says which happened.
+
+    A finding is only ever removed by being named in another finding's
+    `duplicate_ids`, which is the intended merge.
     """
     if not data or not isinstance(data.get("findings"), list):
         return None
@@ -151,35 +163,48 @@ def _apply(
         fid = item.get("id")
         if not isinstance(fid, str) or fid not in by_id or fid in updates:
             continue  # unknown or repeated id: the model made it up
+        if fid in dropped:
+            # Already merged into an earlier finding. Ignoring its own duplicate
+            # claims is what stops a reciprocal "A dupes B, B dupes A" pair from
+            # deleting both.
+            continue
 
         dupes = [
             d
             for d in (item.get("duplicate_ids") or [])
-            if isinstance(d, str) and d in by_id and d != fid
+            if isinstance(d, str) and d in by_id and d != fid and d not in updates
         ]
         updates[fid] = item
         if dupes:
             merged_into[fid] = dupes
             dropped.update(dupes)
 
-    survivors = [fid for fid in updates if fid not in dropped]
-    accounted = set(survivors) | dropped
-    if not survivors or accounted != set(by_id):
-        # The model lost or duplicated findings. Rather than silently ship a
-        # short report, fall back to the deterministic path for this batch.
-        return None
+    if not updates:
+        return None  # nothing usable came back at all
 
     out: list[SecurityFinding] = []
-    for fid in survivors:
-        item = updates[fid]
-        base = by_id[fid]
+    for fid, base in by_id.items():
+        if fid in dropped:
+            continue
+        item = updates.get(fid)
+        if item is None:
+            # The model skipped it. Keep the detector's finding as-is.
+            out.append(base)
+            continue
 
         severity = item.get("severity")
-        if severity not in _VALID_SEVERITY:
+        if not isinstance(severity, str) or severity.lower() not in _VALID_SEVERITY:
             severity = base.detector_severity
+        else:
+            severity = severity.lower()
+
         exploitability = item.get("exploitability")
-        if exploitability not in _VALID_EXPLOIT:
+        if not isinstance(exploitability, str):
             exploitability = None
+        elif exploitability.lower() not in _VALID_EXPLOIT:
+            exploitability = None
+        else:
+            exploitability = exploitability.lower()
 
         explanation = str(item.get("explanation") or "").strip()
         suggested_fix = str(item.get("suggested_fix") or "").strip()

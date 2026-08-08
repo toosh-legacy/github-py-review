@@ -39,5 +39,21 @@
   "missed": [],
   "false_positives": [],
   "notes": [],
-  "latency_ms": 1186
+  "latency_ms": 1176,
+  "triage": {
+    "high_severity_before": 20,
+    "high_severity_after": 20,
+    "precision_at_5_before": 1.0,
+    "precision_at_5_after": 1.0,
+    "findings_before": 37,
+    "findings_after": 37,
+    "merged_deterministically": 13,
+    "merged_by_the_model": 0,
+    "reranked": 0,
+    "exploitability_labelled": 0,
+    "triaged": 0,
+    "tokens_used": 0,
+    "latency_ms": 1154,
+    "backend": "mock"
+  }
 }
