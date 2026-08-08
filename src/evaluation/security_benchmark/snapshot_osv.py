@@ -19,8 +19,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
 
-from security.deps_scan import parse_manifests  # noqa: E402
-from security.osv import fetch_details, query_batch  # noqa: E402
+from reposec.detectors.deps import parse_manifests  # noqa: E402
+from reposec.detectors.osv import fetch_details, query_batch  # noqa: E402
 
 SNAPSHOT = HERE / "osv_snapshot.json"
 MANIFEST = HERE / "repo" / "requirements.txt"

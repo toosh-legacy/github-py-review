@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from schemas import SecurityFinding
-from security.suppress import apply, load_rules, parse
+from reposec.detectors.suppress import apply, load_rules, parse
+from reposec.schemas import SecurityFinding
 
 
 def make(fid="a", file="app/db.py", rule_id="B608"):

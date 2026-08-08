@@ -1,7 +1,6 @@
-# Project metadata + tooling config. The service is run from source (uvicorn,
-# `python -m security.cli`), not pip-installed, so dependencies live in
-# requirements.txt rather than here — pinning them in one place keeps the
-# dependency detector's self-scan meaningful.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "repo-security-scanner"
@@ -20,7 +19,7 @@ keywords = [
     "osv",
     "bandit",
     "eslint",
-    "langgraph",
+    "cli",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -31,18 +30,53 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
 ]
 
+# Kept in step with requirements.txt, which is what the Docker image and CI
+# install. The scanner's own dependency detector checks these pins on every CI
+# run, so a published advisory here breaks the build.
+dependencies = [
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "httpx>=0.28,<1",
+    "langgraph>=1.2,<2",
+    "bandit>=1.9,<2",
+]
+
+[project.optional-dependencies]
+# Triage only. Install with `pip install repo-security-scanner[llm]` to enable
+# the LLM stage; without it the scanner runs detection and ships the
+# rule-authored explanations.
+llm = ["openai>=1.59,<2"]
+
+[project.urls]
+Homepage = "https://github.com/tushaarsood/repo-security-scanner"
+Changelog = "https://github.com/tushaarsood/repo-security-scanner/blob/main/CHANGELOG.md"
+Issues = "https://github.com/tushaarsood/repo-security-scanner/issues"
+
+[project.scripts]
+reposec = "reposec.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["reposec*"]
+
+[tool.setuptools.package-data]
+# The eslint config ships with the wheel; node_modules does not — it is
+# installed by `npm install` or baked into the Docker image, and vendoring a
+# platform-specific tree into a wheel would be wrong.
+"reposec.detectors" = ["eslint/eslint.config.mjs", "eslint/package.json"]
+
 [tool.ruff]
 line-length = 90
 exclude = [".venv", "node_modules"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
-# B008: `Depends(...)` in a default is how FastAPI injection is written.
-ignore = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Single import root: every package lives under src/ — `import backend`,
-# `import security.triage`, `import agent.security_graph`, ...
+# Single import root: every package lives under src/.
 pythonpath = ["src"]
 addopts = "-q"

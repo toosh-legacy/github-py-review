@@ -63,8 +63,8 @@ def load_ground_truth() -> dict:
 # --------------------------------------------------------------------------- #
 def install_osv_snapshot() -> None:
     """Point the dependency detector at the frozen snapshot."""
-    from config import settings
-    from security import deps_scan
+    from reposec.config import settings
+    from reposec.detectors import deps
 
     # The snapshot *is* the offline path, so SECURITY_OFFLINE must not also
     # short-circuit the detector — that would silently score dependencies zero
@@ -82,8 +82,8 @@ def install_osv_snapshot() -> None:
                 out[pkg] = hits[key]
         return out
 
-    deps_scan.query_batch = query_batch
-    deps_scan.fetch_details = lambda ids: {i: vulns[i] for i in ids if i in vulns}
+    deps.query_batch = query_batch
+    deps.fetch_details = lambda ids: {i: vulns[i] for i in ids if i in vulns}
 
 
 # --------------------------------------------------------------------------- #
@@ -273,12 +273,12 @@ def main() -> None:
     if not args.live_osv:
         install_osv_snapshot()
 
-    from config import settings
+    from reposec.config import settings
 
     # Detection is what the detector score measures; the LLM must not be in it.
     settings.security_triage = False
 
-    from agent.security_graph import run_security_scan
+    from reposec.graph import run_security_scan
 
     files = load_repo()
     truth = load_ground_truth()

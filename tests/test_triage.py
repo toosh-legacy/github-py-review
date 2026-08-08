@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import pytest
 
-from config import settings
-from llm_model.base import ChatLLM
-from schemas import SecurityFinding
-from security.triage import BATCH_SIZE, _apply, deterministic_triage, triage
+from reposec.config import settings
+from reposec.llm import ChatLLM
+from reposec.schemas import SecurityFinding
+from reposec.triage import BATCH_SIZE, _apply, deterministic_triage, triage
 
 
 def make(fid, **kw):
@@ -283,7 +283,7 @@ class ScriptedLLM(ChatLLM):
 
 def _run_with(monkeypatch, findings, replies):
     llm = ScriptedLLM(replies)
-    monkeypatch.setattr("llm_model.base.get_llm", lambda: llm)
+    monkeypatch.setattr("reposec.llm.get_llm", lambda: llm)
     monkeypatch.setattr(settings, "security_triage", True)
     out, tokens = triage(findings, {}, repo="acme/demo")
     return out, tokens, llm
@@ -336,7 +336,7 @@ def test_findings_are_batched_so_small_models_stay_coherent(monkeypatch):
 def test_triage_is_skipped_entirely_when_disabled(monkeypatch):
     findings = [make("1"), make("2", line_start=20)]
     llm = ScriptedLLM([{"findings": [{"id": "1", "severity": "high"}]}])
-    monkeypatch.setattr("llm_model.base.get_llm", lambda: llm)
+    monkeypatch.setattr("reposec.llm.get_llm", lambda: llm)
     monkeypatch.setattr(settings, "security_triage", False)
     out, tokens = triage(findings, {})
     assert llm.calls == 0 and tokens == 0

@@ -1,29 +1,34 @@
-# Build context is the repo root (see docker-compose.yml / fly.toml).
+# Build context is the repo root.
+#
+# The image runs the scanner, not a server:
+#
+#     docker run --rm -v "$PWD:/repo:ro" ghcr.io/<owner>/reposec scan /repo
+#
+# Bind-mount read-only: the scanner never writes to the repository, and saying
+# so in the command is cheaper than asking anyone to trust that.
 
 # --------------------------------------------------------------------------- #
 # Stage 1: install eslint-plugin-security.
 #
-# Without this the deployed scanner reports the JS/TS detector as degraded on
-# every single scan and falls back to regex checks. Building it here rather than
-# copying the host's node_modules keeps the image reproducible and platform-
-# correct (native deps compiled for the image, not for whoever ran docker build).
+# Without this the image reports the JS/TS detector as degraded on every scan
+# and falls back to regex checks. Building it here rather than copying the
+# host's node_modules keeps the image reproducible and platform-correct.
 # --------------------------------------------------------------------------- #
 FROM node:22-bookworm-slim AS eslint
 WORKDIR /eslint
-COPY src/security/eslint/package.json ./
+COPY src/reposec/detectors/eslint/package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
 
 
 # --------------------------------------------------------------------------- #
-# Stage 2: the API image.
+# Stage 2: the scanner.
 # --------------------------------------------------------------------------- #
 FROM python:3.13-slim
 
 WORKDIR /app
 
-# git is needed only by the history-scanning CLI, not by the API — but it is a
-# few megabytes and having it means `docker run ... -m security.cli /repo
-# --history` works against a mounted clone.
+# git is required by `scan --history`, which is the reason to run this in CI at
+# all — a working-tree scan cannot see a credential that was deleted later.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git \
     && rm -rf /var/lib/apt/lists/*
@@ -32,25 +37,30 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Node runtime for eslint. Both images are Debian bookworm, so the binary and
-# its shared libraries match; code_scan.py invokes `node <eslint>/bin/eslint.js`
+# its shared libraries match; code.py invokes `node <eslint>/bin/eslint.js`
 # directly and never needs npm or npx at runtime.
 COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 
-# All Python packages live under src/, which is the import root.
+COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-COPY --from=eslint /eslint/node_modules ./src/security/eslint/node_modules
+COPY --from=eslint /eslint/node_modules ./src/reposec/detectors/eslint/node_modules
 
-ENV PYTHONPATH=/app/src
+# Installed rather than PYTHONPATH'd, so the container runs the same `reposec`
+# entry point users get from pip — one code path, not two.
+RUN pip install --no-cache-dir --no-deps -e .
 
-# Fail the build rather than ship an image whose JS detector silently degrades.
-RUN node --version \
-    && python -c "import sys; sys.path.insert(0, 'src'); \
-from security.code_scan import _eslint_binary; \
+# Fail the build rather than ship an image whose detectors silently degrade.
+RUN reposec doctor --no-color \
+    && python -c "import sys; \
+from reposec.detectors.code import _eslint_binary; \
 assert _eslint_binary() is not None, 'eslint missing from image'; \
-import bandit; print('detectors ok')"
+import bandit, shutil; \
+assert shutil.which('node'), 'node missing from image'"
 
-EXPOSE 8001
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"
+# A scan writes nothing outside /tmp, so the container does not need root.
+RUN useradd --create-home --uid 10001 scanner
+USER scanner
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8001"]
+# `docker run <image> scan /repo` — the subcommand is the argument.
+ENTRYPOINT ["reposec"]
+CMD ["--help"]

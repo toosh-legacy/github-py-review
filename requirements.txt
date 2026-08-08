@@ -1,31 +1,24 @@
-# Runtime dependencies for the API and the CLI. This is what the Docker image
-# installs, so keep it to what the scanner actually imports — the dashboard and
-# the dev tooling have their own files.
+# Runtime dependencies, pinned. This is what the Docker image and CI install;
+# pyproject.toml carries the same set as ranges for `pip install`.
 #
-# Versions are pinned, and the scanner checks them against OSV on every CI run
-# (see the self-scan job). If a pin here picks up a published advisory, the
-# build fails — which is the point of shipping a dependency detector.
+# The scanner checks these pins against OSV on every CI run (the self-scan job),
+# so a published advisory here breaks the build — which is the point of shipping
+# a dependency detector.
 #
 #   contributors:  pip install -r requirements-dev.txt
-#   dashboard:     pip install -r src/apps/dashboard/requirements.txt
+#   users:         pip install repo-security-scanner
 
-# --- Backend ---
-fastapi==0.141.1
-uvicorn[standard]==0.52.1
 pydantic==2.10.4
 pydantic-settings==2.7.1
-sqlalchemy==2.0.36
-psycopg[binary]==3.2.3    # the driver behind postgresql+psycopg:// URLs
 httpx==0.28.1             # the OSV client
+langgraph==1.2.10         # the scan pipeline
+bandit==1.9.4             # unsafe-code detector for Python
 
-# --- Agent + the LLM seam ---
-langgraph==1.2.10
-openai==1.59.6            # also the transport for local OpenAI-compatible servers
+# Optional, triage only. Without it the scanner runs detection and ships the
+# rule-authored explanations instead of model-written ones.
+openai==1.59.6
 
-# --- Security detectors ---
-bandit==1.9.4             # unsafe-code detector for Python (code_scan.py)
-# The JS/TS half needs Node: run `npm install` in src/security/eslint/ to enable
-# eslint-plugin-security. Without it the scanner falls back to regex checks and
-# reports the detector as degraded. The Docker image installs it for you.
-# Secrets and dependencies need no extra packages: the rules are in
-# security/rules.py and OSV is queried over HTTP with httpx.
+# The JS/TS detector needs Node, not pip: run `npm install` in
+# src/reposec/detectors/eslint/ to enable eslint-plugin-security. Without it the
+# scanner falls back to regex checks and reports the detector as degraded.
+# The Docker image installs it for you.

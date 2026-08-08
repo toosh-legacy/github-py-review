@@ -1,20 +1,24 @@
-"""The command-line scanner, including its CI exit codes."""
+"""The `reposec` command: output formats and the exit codes CI depends on.
+
+Exit codes are a contract — a CI pipeline breaks silently if they drift — so
+each one is asserted rather than assumed.
+"""
 from __future__ import annotations
 
 import json
 
 import pytest
 
-from security.cli import main
+from reposec.cli import EXIT_DEGRADED, EXIT_FINDINGS, EXIT_OK, EXIT_USAGE, main
 
-LEAKED = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+LEAKED = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
 
 
 @pytest.fixture()
 def repo(tmp_path, monkeypatch):
-    # Never let a CLI test reach osv.dev.
-    from config import settings
+    from reposec.config import settings
 
+    # Never let a CLI test reach osv.dev.
     monkeypatch.setattr(settings, "security_offline", True)
     monkeypatch.setattr(settings, "security_triage", False)
 
@@ -30,48 +34,171 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture()
+def clean_repo(tmp_path, monkeypatch):
+    from reposec.config import settings
+
+    monkeypatch.setattr(settings, "security_offline", True)
+    monkeypatch.setattr(settings, "security_triage", False)
+    (tmp_path / "ok.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
+    return tmp_path
+
+
+# --------------------------------------------------------------------------- #
+# scan
+# --------------------------------------------------------------------------- #
 def test_reports_findings_and_exits_zero_without_fail_on(repo, capsys):
-    assert main([str(repo), "--no-color"]) == 0
+    assert main(["scan", str(repo), "--no-color"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "github-pat" in out
     assert "file(s) scanned" in out
 
 
+def test_path_defaults_to_the_current_directory(clean_repo, monkeypatch, capsys):
+    monkeypatch.chdir(clean_repo)
+    assert main(["scan", "--no-color"]) == EXIT_OK
+    assert "No findings." in capsys.readouterr().out
+
+
 def test_secret_is_redacted_in_cli_output(repo, capsys):
-    main([str(repo), "--no-color"])
+    main(["scan", str(repo), "--no-color"])
     assert LEAKED not in capsys.readouterr().out
 
 
 def test_json_output_is_a_valid_security_report(repo, capsys):
-    assert main([str(repo), "--format", "json"]) == 0
+    assert main(["scan", str(repo), "--format", "json"]) == EXIT_OK
     report = json.loads(capsys.readouterr().out)
     assert {"summary", "findings", "counts_by_category", "degraded"} <= report.keys()
     assert LEAKED not in json.dumps(report)
 
 
-def test_fail_on_high_exits_nonzero_when_a_high_finding_exists(repo, capsys):
-    # The leaked PAT is high severity, so CI should block.
-    assert main([str(repo), "--fail-on", "high", "--no-color"]) == 1
+def test_no_color_flag_suppresses_escape_sequences(repo, capsys):
+    main(["scan", str(repo), "--no-color"])
+    assert "\033[" not in capsys.readouterr().out
 
 
-def test_fail_on_high_exits_zero_on_a_clean_tree(tmp_path, monkeypatch, capsys):
-    from config import settings
+# --------------------------------------------------------------------------- #
+# SARIF — what makes findings show up in GitHub's Security tab
+# --------------------------------------------------------------------------- #
+def test_sarif_output_is_well_formed(repo, capsys):
+    assert main(["scan", str(repo), "--format", "sarif"]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
 
-    monkeypatch.setattr(settings, "security_offline", True)
-    monkeypatch.setattr(settings, "security_triage", False)
-    clean = "def add(a, b):\n    return a + b\n"
-    (tmp_path / "ok.py").write_text(clean, encoding="utf-8")
-    assert main([str(tmp_path), "--fail-on", "high", "--no-color"]) == 0
+    assert doc["version"] == "2.1.0"
+    run = doc["runs"][0]
+    assert run["tool"]["driver"]["name"] == "reposec"
+    assert run["results"], "no results emitted"
+
+    levels = {r["level"] for r in run["results"]}
+    assert levels <= {"error", "warning", "note"}, "SARIF has no 'medium' level"
+
+    for result in run["results"]:
+        region = result["locations"][0]["physicalLocation"]["region"]
+        # SARIF requires startLine >= 1; a history finding has line 0 internally.
+        assert region["startLine"] >= 1
+        assert result["ruleId"]
+        assert result["partialFingerprints"]["reposecFindingId"]
+
+    rule_ids = {r["id"] for r in run["tool"]["driver"]["rules"]}
+    assert rule_ids == {r["ruleId"] for r in run["results"]}
 
 
-def test_suppression_file_is_honoured_by_the_cli(repo, capsys):
+def test_sarif_never_contains_the_raw_secret(repo, capsys):
+    main(["scan", str(repo), "--format", "sarif"])
+    assert LEAKED not in capsys.readouterr().out
+
+
+def test_sarif_carries_degraded_detectors(repo, capsys):
+    # A machine-readable report that hid a detector which could not run would be
+    # claiming coverage it does not have. The fixture has no manifest, so the
+    # dependency detector always has something to say here.
+    main(["scan", str(repo), "--format", "sarif"])
+    doc = json.loads(capsys.readouterr().out)
+    notes = doc["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+    assert notes, "degraded detectors were dropped from the SARIF output"
+    assert any("dependency" in n["message"]["text"] for n in notes)
+    assert all(n["level"] == "warning" for n in notes)
+
+
+# --------------------------------------------------------------------------- #
+# Exit codes
+# --------------------------------------------------------------------------- #
+def test_fail_on_high_exits_nonzero_when_a_high_finding_exists(repo):
+    assert main(["scan", str(repo), "--fail-on", "high", "--no-color"]) == EXIT_FINDINGS
+
+
+def test_fail_on_high_exits_zero_on_a_clean_tree(clean_repo):
+    assert (
+        main(["scan", str(clean_repo), "--fail-on", "high", "--no-color"]) == EXIT_OK
+    )
+
+
+def test_fail_on_low_catches_what_fail_on_high_lets_through(clean_repo, capsys):
+    # A tree with only low findings passes --fail-on high and trips --fail-on low.
+    (clean_repo / "x.py").write_text("import pickle\n", encoding="utf-8")
+    assert main(["scan", str(clean_repo), "--fail-on", "high", "--no-color"]) == EXIT_OK
+    assert (
+        main(["scan", str(clean_repo), "--fail-on", "low", "--no-color"])
+        == EXIT_FINDINGS
+    )
+
+
+def test_strict_exits_three_when_a_detector_could_not_run(repo):
+    # --offline degrades the dependency detector on purpose.
+    code = main(["scan", str(repo), "--offline", "--strict", "--no-color"])
+    assert code == EXIT_DEGRADED
+
+
+def test_strict_is_separate_from_fail_on(clean_repo):
+    # A degraded detector is not a finding: without --strict it stays exit 0.
+    assert (
+        main(["scan", str(clean_repo), "--offline", "--fail-on", "high", "--no-color"])
+        == EXIT_OK
+    )
+
+
+def test_a_missing_directory_is_a_usage_error(tmp_path, capsys):
+    assert main(["scan", str(tmp_path / "nope"), "--no-color"]) == EXIT_USAGE
+    assert "not a directory" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# Flags and other commands
+# --------------------------------------------------------------------------- #
+def test_suppression_file_is_honoured(repo, capsys):
     (repo / ".secscanignore").write_text("app/**:github-pat\n", encoding="utf-8")
-    main([str(repo), "--no-color"])
+    main(["scan", str(repo), "--no-color"])
     out = capsys.readouterr().out
     assert "github-pat" not in out
     assert "suppressed" in out
 
 
-def test_a_missing_directory_is_a_usage_error(tmp_path, capsys):
-    assert main([str(tmp_path / "nope"), "--no-color"]) == 2
-    assert "not a directory" in capsys.readouterr().err
+def test_no_triage_flag_overrides_configuration(repo, monkeypatch, capsys):
+    from reposec.config import settings
+
+    monkeypatch.setattr(settings, "security_triage", True)
+    main(["scan", str(repo), "--no-triage", "--no-color"])
+    assert settings.security_triage is False
+
+
+def test_doctor_reports_each_detector(capsys):
+    assert main(["doctor", "--no-color"]) == EXIT_OK
+    out = capsys.readouterr().out
+    for detector in ("secrets", "dependencies", "code (python)", "code (js/ts)"):
+        assert detector in out
+    assert "triage" in out
+
+
+def test_version_is_reported(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert "reposec" in capsys.readouterr().out
+
+
+def test_no_subcommand_is_a_usage_error(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main([])
+    assert exc.value.code == EXIT_USAGE

@@ -1,17 +1,18 @@
-# The API image only needs the service packages under src/. Everything below is
-# dev/train/UI surface that would bloat the image (and its build cache).
+# The image needs the package, its pins, and the metadata `pip install -e .`
+# reads. Everything else is dev surface that would bloat the image and bust the
+# layer cache on every change.
 .git
 .github
 .venv
-_archive
+.pytest_cache
+.ruff_cache
+**/__pycache__
+*.sqlite3
+dist
 docs
 tests
 deploy
-**/__pycache__
-*.sqlite3
-src/ml
-src/apps
-# The image builds its own node_modules from package.json in a Node stage, so
-# the host's copy must not be shipped in: it may have been built for a different
-# platform, and it would bust the layer cache on every change.
-src/security/eslint/node_modules
+src/evaluation
+# Built from package.json in the Node stage; the host's copy may target another
+# platform and must not be shipped in.
+src/reposec/detectors/eslint/node_modules
