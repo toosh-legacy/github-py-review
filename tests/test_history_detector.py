@@ -10,11 +10,10 @@ import shutil
 import subprocess
 
 import pytest
+from synthetic import AWS_KEY_ID as OTHER
+from synthetic import GITHUB_PAT as LEAKED
 
 from reposec.detectors.history import is_repo, scan_history
-
-LEAKED = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
-OTHER = "AKIA4NHQ7ZP2VXK3MTBW"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git is not installed"

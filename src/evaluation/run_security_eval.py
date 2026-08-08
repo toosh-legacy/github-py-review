@@ -24,6 +24,7 @@ re-ranking moved genuinely exploitable findings up, and what it cost in tokens.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from dataclasses import dataclass, field
@@ -33,7 +34,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 BENCH = HERE / "security_benchmark"
-REPO = BENCH / "repo"
 RESULTS = BENCH / "results.json"
 
 
@@ -41,17 +41,20 @@ RESULTS = BENCH / "results.json"
 # Fixture loading
 # --------------------------------------------------------------------------- #
 def load_repo() -> list[tuple[str, str]]:
-    """Read the fixture repo as (repo-relative path, content) pairs."""
-    files = []
-    for p in sorted(REPO.rglob("*")):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(REPO).as_posix()
-        try:
-            files.append((rel, p.read_text(encoding="utf-8")))
-        except (OSError, UnicodeDecodeError):
-            continue
-    return files
+    """Decode the fixture corpus into (path, content) pairs.
+
+    The corpus is stored base64-encoded rather than as files on disk. It is a
+    repository full of deliberately-planted credentials, which is exactly what
+    a secret-detector benchmark needs and exactly what every scanner in the
+    world flags — including GitHub's push protection and this project's own.
+    Encoding it means the repository holds no plaintext credential while the
+    detector still sees the precise bytes it has to match.
+    """
+    corpus = json.loads((BENCH / "corpus.json").read_text(encoding="utf-8"))
+    return [
+        (path, base64.b64decode(encoded).decode("utf-8"))
+        for path, encoded in sorted(corpus["files"].items())
+    ]
 
 
 def load_ground_truth() -> dict:

@@ -21,3 +21,7 @@ venv/
 # Node (the eslint install for the JS/TS detector)
 node_modules/
 dist/
+
+# The benchmark fixture is stored encoded in corpus.json; repo/ is the
+# unpacked working copy and contains plaintext synthetic credentials.
+src/evaluation/security_benchmark/repo/

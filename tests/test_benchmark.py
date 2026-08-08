@@ -99,14 +99,25 @@ def test_unpinned_dependency_is_reported_not_guessed(scored):
 
 def test_ground_truth_and_fixture_stay_in_sync():
     truth = json.loads((BENCH / "ground_truth.json").read_text(encoding="utf-8"))
+    corpus = {path: content for path, content in _load_harness().load_repo()}
     for entry in truth["planted"] + truth["decoys"]:
-        path = BENCH / "repo" / entry["file"]
-        assert path.is_file(), f"ground truth references a missing file: {entry['file']}"
-        lines = path.read_text(encoding="utf-8").splitlines()
+        assert entry["file"] in corpus, (
+            f"ground truth references a file that is not in the corpus: {entry['file']}"
+        )
+        lines = corpus[entry["file"]].splitlines()
         assert entry["line"] <= len(lines), (
             f"{entry['file']}:{entry['line']} is past the end of the file — "
             "the fixture moved but ground_truth.json did not"
         )
+
+
+def test_the_corpus_contains_no_plaintext_credential():
+    # The whole reason it is encoded: a fixture full of credential-shaped
+    # strings is indistinguishable from a real leak to anything reading the
+    # repository as text, including GitHub's push protection.
+    raw = (BENCH / "corpus.json").read_text(encoding="utf-8")
+    for shape in ("AKIA", "ghp_", "sk_live_", "xoxb-", "BEGIN RSA PRIVATE KEY"):
+        assert shape not in raw, f"corpus.json leaks a plaintext {shape!r}"
 
 
 def test_osv_snapshot_is_present_and_populated():

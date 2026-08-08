@@ -139,7 +139,10 @@ def _materialize(files: list[tuple[str, str]], root: Path) -> dict[str, str]:
         dest = root / rel
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content, encoding="utf-8")
+            # newline="" disables translation. Without it, content that already
+            # contains CRLF becomes CRCRLF on Windows, which makes bandit fail to
+            # parse the file and shifts every line number eslint reports.
+            dest.write_text(content, encoding="utf-8", newline="")
         except OSError:
             continue
         written[rel] = path

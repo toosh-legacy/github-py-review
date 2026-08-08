@@ -7,14 +7,21 @@ matter at least as much as the detection ones.
 from __future__ import annotations
 
 import pytest
+from synthetic import (
+    ANTHROPIC_KEY,
+    AWS_DOC_SAMPLE,
+    AWS_KEY_ID,
+    AWS_SECRET,
+    GITHUB_PAT,
+    HIGH_ENTROPY,
+    POSTGRES_URL,
+    PRIVATE_KEY,
+    SLACK_TOKEN,
+    STRIPE_KEY,
+)
 
 from reposec.detectors.common import redact, shannon_entropy
 from reposec.detectors.secrets import scan_file, scrub
-
-# Synthetic credentials: correct shape for the rules, not issued by anyone.
-AWS_KEY_ID = "AKIA4NHQ7ZP2VXK3MTBW"
-AWS_SECRET = "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"
-GITHUB_PAT = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
 
 
 @pytest.mark.parametrize(
@@ -23,14 +30,11 @@ GITHUB_PAT = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
         (f'AWS_ACCESS_KEY_ID = "{AWS_KEY_ID}"', "aws-access-key-id"),
         (f'aws_secret_access_key = "{AWS_SECRET}"', "aws-secret-access-key"),
         (f'token = "{GITHUB_PAT}"', "github-pat"),
-        ('key = "sk-ant-api03-QmFzZTY0RW5jb2RlZFN0cmluZ1hZWjEyMzQ"', "anthropic-api-key"),
-        ('t = "xoxb-2847561930-4471829365-Jd83kFmQpZx71LsWnRb2Yh4T"', "slack-token"),
-        ('k = "sk_live_51HxQmZ2eZvKYlo2CkL9mNbVc"', "stripe-secret-key"),
-        ("-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n", "private-key"),
-        (
-            'DB = "postgres://admin:Str0ngP4ssw0rd@db.internal:5432/prod"',
-            "database-connection-string",
-        ),
+        (f'key = "{ANTHROPIC_KEY}"', "anthropic-api-key"),
+        (f't = "{SLACK_TOKEN}"', "slack-token"),
+        (f'k = "{STRIPE_KEY}"', "stripe-secret-key"),
+        (PRIVATE_KEY, "private-key"),
+        (f'DB = "{POSTGRES_URL}"', "database-connection-string"),
     ],
 )
 def test_detects_known_credential_shapes(content, rule_id):
@@ -39,7 +43,7 @@ def test_detects_known_credential_shapes(content, rule_id):
 
 
 def test_high_entropy_generic_key_is_flagged():
-    content = 'CLIENT_SECRET = "hQ7zRt3XmW9pLd2VbN6cKfJ8sYaG4uEo"'
+    content = f'CLIENT_SECRET = "{HIGH_ENTROPY}"'
     findings = scan_file("app/config.py", content)
     assert {f.rule_id for f in findings} == {"generic-api-key"}
 
@@ -68,8 +72,8 @@ def test_example_files_are_skipped(path):
 @pytest.mark.parametrize(
     "content",
     [
-        'AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"',  # AWS's documented sample
-        'token = "ghp_your-token-here-replace-with-real-value"',
+        f'AWS_ACCESS_KEY_ID = "{AWS_DOC_SAMPLE}"',  # AWS's documented sample
+        'token = "ghp_" + "your-token-here-replace-with-real-value"',
         'secret = "${VAULT_CLIENT_SECRET}"',
         'secret = "<your-client-secret>"',
         'key = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"',
@@ -115,7 +119,7 @@ def test_line_numbers_point_at_the_secret():
 
 
 def test_entropy_separates_random_from_prose():
-    assert shannon_entropy("hQ7zRt3XmW9pLd2VbN6cKfJ8sYaG4uEo") > 4.0
+    assert shannon_entropy(HIGH_ENTROPY) > 4.0
     assert shannon_entropy("the quick brown fox") < 4.0
     assert shannon_entropy("") == 0.0
 

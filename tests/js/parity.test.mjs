@@ -10,8 +10,8 @@
 // Run from the repo root.
 
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -27,25 +27,23 @@ import {
 } from "../../src/apps/extension/scanner.js";
 
 const BENCH = "src/evaluation/security_benchmark";
-const REPO = join(BENCH, "repo");
 
-function readRepo(dir) {
-  const files = [];
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) files.push(...readRepo(full));
-    else {
-      files.push({
-        path: relative(REPO, full).replace(/\\/g, "/"),
-        content: readFileSync(full, "utf8"),
-      });
-    }
-  }
-  return files;
+// The corpus is stored base64-encoded rather than as files on disk: it is a
+// repository full of deliberately-planted credentials, which every scanner in
+// the world flags — including GitHub's push protection. Decoding it here means
+// both implementations score against exactly the same bytes.
+function loadCorpus() {
+  const corpus = JSON.parse(readFileSync(join(BENCH, "corpus.json"), "utf8"));
+  return Object.entries(corpus.files)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, encoded]) => ({
+      path,
+      content: Buffer.from(encoded, "base64").toString("utf8"),
+    }));
 }
 
 const truth = JSON.parse(readFileSync(join(BENCH, "ground_truth.json"), "utf8"));
-const files = readRepo(REPO);
+const files = loadCorpus();
 const findings = files
   .filter((f) => isScannable(f.path))
   .flatMap((f) => scanFileForSecrets(f.path, f.content));
@@ -82,7 +80,7 @@ test("produces nothing in example or vendored files", () => {
 });
 
 test("never returns the raw secret", () => {
-  const raw = readFileSync(join(REPO, "conf/settings.py"), "utf8");
+  const raw = files.find((f) => f.path === "conf/settings.py").content;
   const serialised = JSON.stringify(findings);
   for (const f of findings) {
     assert.ok(f.evidence.includes("*"), `${f.rule_id} evidence is not redacted`);
