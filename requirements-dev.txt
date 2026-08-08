@@ -1,0 +1,16 @@
+# Everything a contributor needs: the runtime, plus tooling and the dashboard.
+#
+#     pip install -r requirements-dev.txt
+#
+# CI installs this file; the Docker image installs requirements.txt only, so the
+# API image does not carry Streamlit, Locust, or the test tooling.
+
+-r requirements.txt
+-r src/apps/dashboard/requirements.txt
+
+# --- Lint + tests ---
+ruff==0.8.6
+pytest==9.1.1
+
+# --- Load test ---
+locust==2.32.5

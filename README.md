@@ -88,11 +88,20 @@ shown it. The node order is itself asserted by a test.
 
 ```bash
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
-# source .venv/bin/activate && pip install -r requirements.txt   # macOS/Linux
+.venv/Scripts/python.exe -m pip install -r requirements-dev.txt   # Windows
+# source .venv/bin/activate && pip install -r requirements-dev.txt  # macOS/Linux
 
 PYTHONPATH=src .venv/Scripts/python.exe -m uvicorn backend.main:app --port 8001
 ```
+
+Three requirement files, so the API image does not carry the dashboard or the
+test tooling:
+
+| File | For |
+|---|---|
+| `requirements.txt` | the API and the CLI — what the Docker image installs |
+| `requirements-dev.txt` | everything above, plus ruff, pytest, locust, dashboard |
+| `src/apps/dashboard/requirements.txt` | the Streamlit app, deployed separately |
 
 Then load `src/apps/extension/` at `chrome://extensions` (Developer mode → *Load
 unpacked*), open any GitHub repository, and click **🛡️ Security scan**.

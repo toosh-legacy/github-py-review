@@ -1,9 +1,13 @@
-# Everything the project needs, in one place. Install from the repo root:
-#     pip install -r requirements.txt
+# Runtime dependencies for the API and the CLI. This is what the Docker image
+# installs, so keep it to what the scanner actually imports — the dashboard and
+# the dev tooling have their own files.
 #
 # Versions are pinned, and the scanner checks them against OSV on every CI run
 # (see the self-scan job). If a pin here picks up a published advisory, the
 # build fails — which is the point of shipping a dependency detector.
+#
+#   contributors:  pip install -r requirements-dev.txt
+#   dashboard:     pip install -r src/apps/dashboard/requirements.txt
 
 # --- Backend ---
 fastapi==0.141.1
@@ -11,26 +15,17 @@ uvicorn[standard]==0.52.1
 pydantic==2.10.4
 pydantic-settings==2.7.1
 sqlalchemy==2.0.36
-psycopg[binary]==3.2.3
-httpx==0.28.1
+psycopg[binary]==3.2.3    # the driver behind postgresql+psycopg:// URLs
+httpx==0.28.1             # the OSV client
 
-# --- Agent + reviewers ---
+# --- Agent + the LLM seam ---
 langgraph==1.2.10
-openai==1.59.6          # also the transport for local OpenAI-compatible servers
-ruff==0.8.6             # the static-analysis node, and the project's linter
+openai==1.59.6            # also the transport for local OpenAI-compatible servers
 
 # --- Security detectors ---
-bandit==1.9.4           # unsafe-code detector for Python (code_scan.py)
+bandit==1.9.4             # unsafe-code detector for Python (code_scan.py)
 # The JS/TS half needs Node: run `npm install` in src/security/eslint/ to enable
 # eslint-plugin-security. Without it the scanner falls back to regex checks and
 # reports the detector as degraded. The Docker image installs it for you.
 # Secrets and dependencies need no extra packages: the rules are in
 # security/rules.py and OSV is queried over HTTP with httpx.
-
-# --- Streamlit demo ---
-streamlit==1.61.1
-requests==2.34.2
-
-# --- Tests / load test ---
-pytest==9.1.1
-locust==2.32.5

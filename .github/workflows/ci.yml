@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
       # Exercises the real eslint-plugin-security path rather than the fallback.
       - name: Install eslint-plugin-security
         run: npm install --no-audit --no-fund
@@ -45,7 +45,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
       - name: Install eslint-plugin-security
         run: npm install --no-audit --no-fund
         working-directory: src/security/eslint

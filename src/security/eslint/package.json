@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "description": "Isolated eslint install for the JS/TS half of the code detector. Run `npm install` here to enable it; without it the scanner falls back to regex checks and says so.",
-  "devDependencies": {
+  "dependencies": {
     "@typescript-eslint/parser": "^8.18.0",
     "eslint": "^9.17.0",
     "eslint-plugin-security": "^3.0.1"
