@@ -20,7 +20,14 @@ from dataclasses import dataclass
 from reposec.schemas import SecurityFinding
 
 from .common import finding_id, is_vendored
-from .osv import OSVUnavailable, Package, fetch_details, query_batch
+from .osv import (
+    MAX_QUERIES,
+    MAX_VULN_DETAILS,
+    OSVUnavailable,
+    Package,
+    fetch_details,
+    query_batch,
+)
 
 _PY_MANIFESTS = re.compile(r"(^|/)(requirements[\w.-]*\.txt|constraints[\w.-]*\.txt)$")
 # Extras (`requests[socks]==2.31.0`) are stripped with a separate pass rather
@@ -420,8 +427,19 @@ def scan_dependencies(
         degraded.append(f"dependency: OSV unreachable ({exc}) — versions not checked")
         return [], degraded
 
+    if getattr(hits, "truncated", 0):
+        degraded.append(
+            f"dependency: {hits.truncated} package(s) past the {MAX_QUERIES} "
+            "query cap were not checked"
+        )
+
     all_ids = [vid for ids in hits.values() for vid in ids]
     details = fetch_details(all_ids)
+    if getattr(details, "truncated", 0):
+        degraded.append(
+            f"dependency: {details.truncated} advisory record(s) past the "
+            f"{MAX_VULN_DETAILS} detail cap were not fetched"
+        )
 
     findings: list[SecurityFinding] = []
     for pkg, ids in hits.items():

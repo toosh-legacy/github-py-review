@@ -18,9 +18,10 @@ import httpx
 OSV_API = "https://api.osv.dev"
 
 # Bound the work: a huge lockfile shouldn't turn one scan into a thousand
-# requests. Findings past the cap are reported as a degraded detector.
+# requests. Anything past a cap is *reported*, never silently dropped — see
+# `truncated` on the return values.
 MAX_QUERIES = 1000
-MAX_VULN_DETAILS = 150
+MAX_VULN_DETAILS = 500
 # Enough to hide the round-trip latency without hammering a free public API.
 DETAIL_WORKERS = 8
 
@@ -38,6 +39,19 @@ class OSVUnavailable(RuntimeError):
     """OSV could not be reached or refused the request."""
 
 
+class _Result(dict):
+    """A dict that also remembers how much was left unchecked.
+
+    The caps exist so one scan cannot fire thousands of requests, but a cap that
+    silently shortens the answer is the exact failure this tool reports in other
+    people's code. `truncated` is how the caller learns to say so.
+    """
+
+    def __init__(self, data: dict, truncated: int = 0) -> None:
+        super().__init__(data)
+        self.truncated = truncated
+
+
 def _chunks(items: list, size: int):
     for i in range(0, len(items), size):
         yield items[i : i + size]
@@ -46,9 +60,14 @@ def _chunks(items: list, size: int):
 def query_batch(
     packages: list[Package], *, timeout: float = 20.0, client: httpx.Client | None = None
 ) -> dict[Package, list[str]]:
-    """Map each package to the OSV ids affecting it. Raises OSVUnavailable."""
+    """Map each package to the OSV ids affecting it. Raises OSVUnavailable.
+
+    Sets a `truncated` attribute on the returned dict-like when the cap was hit,
+    so the caller can say so rather than quietly reporting a partial answer.
+    """
     if not packages:
-        return {}
+        return _Result({}, 0)
+    skipped = max(0, len(packages) - MAX_QUERIES)
     packages = packages[:MAX_QUERIES]
     owns_client = client is None
     client = client or httpx.Client(timeout=timeout)
@@ -81,7 +100,7 @@ def query_batch(
     finally:
         if owns_client:
             client.close()
-    return result
+    return _Result(result, skipped)
 
 
 def fetch_details(
@@ -95,9 +114,11 @@ def fetch_details(
     is half a minute, which is enough to trip an HTTP proxy timeout on the
     /security/scan route.
     """
-    unique = list(dict.fromkeys(vuln_ids))[:MAX_VULN_DETAILS]
+    all_ids = list(dict.fromkeys(vuln_ids))
+    unique = all_ids[:MAX_VULN_DETAILS]
+    skipped = len(all_ids) - len(unique)
     if not unique:
-        return {}
+        return _Result({}, 0)
     owns_client = client is None
     client = client or httpx.Client(
         timeout=timeout,
@@ -125,4 +146,4 @@ def fetch_details(
     finally:
         if owns_client:
             client.close()
-    return out
+    return _Result(out, skipped)

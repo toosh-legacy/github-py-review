@@ -24,6 +24,7 @@ VENDOR_DIRS = {
     "__pycache__",
     ".mypy_cache",
     ".pytest_cache",
+    ".ruff_cache",
     ".tox",
     "coverage",
     ".next",

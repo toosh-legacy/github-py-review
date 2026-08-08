@@ -51,25 +51,37 @@ def _version() -> str:
 # Reading the working tree
 # --------------------------------------------------------------------------- #
 def read_repo(root: Path, max_bytes: int) -> list[tuple[str, str]]:
-    """Read the working tree, honouring the detectors' own filters."""
-    from reposec.detectors.common import is_scannable, looks_binary
+    """Read the working tree, honouring the detectors' own filters.
+
+    Directories are pruned during the walk rather than filtered afterwards. On
+    this repository a naive `rglob("*")` visits ~22,000 entries to keep 161 —
+    `.venv` alone is 18,000 — and stats every one of them. On a monorepo with a
+    large `.git` or `node_modules` that is the difference between a scan feeling
+    instant and feeling broken.
+    """
+    from reposec.detectors.common import VENDOR_DIRS, is_scannable, looks_binary
 
     files: list[tuple[str, str]] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root).as_posix()
-        if not is_scannable(rel):
-            continue
-        try:
-            if path.stat().st_size > max_bytes:
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Mutating dirnames in place is what stops os.walk descending.
+        dirnames[:] = sorted(d for d in dirnames if d not in VENDOR_DIRS)
+
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            rel = path.relative_to(root).as_posix()
+            if not is_scannable(rel):
                 continue
-            content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        if looks_binary(content):
-            continue
-        files.append((rel, content))
+            try:
+                if path.stat().st_size > max_bytes:
+                    continue
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError, ValueError):
+                # Unreadable, not UTF-8, or a broken symlink. One bad file must
+                # not lose the scan.
+                continue
+            if looks_binary(content):
+                continue
+            files.append((rel, content))
     return files
 
 
@@ -246,14 +258,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     else:
         print(render_text(report, color=_use_color(args.no_color)), end="")
 
-    if args.strict and report.degraded:
-        print(
-            f"reposec: {len(report.degraded)} detector(s) could not run "
-            "(--strict)",
-            file=sys.stderr,
-        )
-        return EXIT_DEGRADED
-
+    # Findings outrank degradation. Both exit non-zero, but when a run has a
+    # leaked credential *and* a missing linter, the credential is the thing the
+    # exit code should name.
     if args.fail_on:
         floor = _SEVERITY_ORDER[args.fail_on]
         blocking = [
@@ -265,7 +272,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 f"'{args.fail_on}' severity",
                 file=sys.stderr,
             )
+            if args.strict and report.degraded:
+                print(
+                    f"reposec: also {len(report.degraded)} detector(s) could "
+                    "not run",
+                    file=sys.stderr,
+                )
             return EXIT_FINDINGS
+
+    if args.strict and report.degraded:
+        print(
+            f"reposec: {len(report.degraded)} detector(s) could not run (--strict)",
+            file=sys.stderr,
+        )
+        return EXIT_DEGRADED
     return EXIT_OK
 
 

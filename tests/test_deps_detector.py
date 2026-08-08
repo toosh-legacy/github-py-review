@@ -267,3 +267,44 @@ def test_scan_explains_why_it_found_nothing(files, expected):
     findings, degraded = scan_dependencies(files)
     assert findings == []
     assert any(expected in d for d in degraded)
+
+
+# --------------------------------------------------------------------------- #
+# Caps must be reported, never silently applied
+# --------------------------------------------------------------------------- #
+def test_hitting_the_query_cap_is_reported(monkeypatch):
+    # A cap that silently shortens the answer is the exact failure this tool
+    # reports in other people's code.
+    from reposec.detectors.osv import _Result
+
+    monkeypatch.setattr(deps, "query_batch", lambda pkgs: _Result({}, truncated=42))
+    monkeypatch.setattr(deps, "fetch_details", lambda ids: _Result({}, 0))
+
+    findings, degraded = scan_dependencies([("requirements.txt", "requests==2.19.0")])
+    assert findings == []
+    assert any("42 package(s) past the" in d for d in degraded)
+
+
+def test_hitting_the_detail_cap_is_reported(monkeypatch):
+    from reposec.detectors.osv import _Result
+
+    pkg_holder = {}
+
+    def hits(pkgs):
+        pkg_holder["p"] = pkgs[0]
+        return _Result({pkgs[0]: ["GHSA-x"]}, 0)
+
+    monkeypatch.setattr(deps, "query_batch", hits)
+    monkeypatch.setattr(deps, "fetch_details", lambda ids: _Result({}, truncated=7))
+
+    _, degraded = scan_dependencies([("requirements.txt", "requests==2.19.0")])
+    assert any("7 advisory record(s) past the" in d for d in degraded)
+
+
+def test_no_truncation_adds_no_noise(monkeypatch):
+    from reposec.detectors.osv import _Result
+
+    monkeypatch.setattr(deps, "query_batch", lambda pkgs: _Result({}, 0))
+    monkeypatch.setattr(deps, "fetch_details", lambda ids: _Result({}, 0))
+    _, degraded = scan_dependencies([("requirements.txt", "requests==2.19.0")])
+    assert not any("past the" in d for d in degraded)

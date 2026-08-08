@@ -77,6 +77,45 @@ def is_repo(path: str) -> bool:
         return False
 
 
+def _stream_git(repo: str, *args: str):
+    """Yield git's stdout line by line, without buffering all of it.
+
+    `git log --patch` over a thousand commits can be hundreds of megabytes on a
+    repository that ever vendored its dependencies or committed generated files.
+    Reading that into one string works fine on a small repo and falls over on
+    exactly the large ones where history scanning matters most.
+    """
+    try:
+        proc = subprocess.Popen(
+            ["git", "-C", repo, *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            # Repositories contain non-UTF-8 bytes in old commits and author
+            # names; replace rather than crash the scan.
+            encoding="utf-8",
+            errors="replace",
+        )
+    except FileNotFoundError as exc:
+        raise GitUnavailable("git is not installed or not on PATH") from exc
+
+    drained = False
+    try:
+        yield from proc.stdout
+        drained = True
+    finally:
+        # The consumer may stop early. Closing stdout makes git exit on SIGPIPE
+        # rather than blocking forever on a full pipe buffer.
+        proc.stdout.close()
+        stderr = proc.stderr.read()
+        proc.stderr.close()
+        code = proc.wait()
+        # A non-zero code after we stopped reading early is that SIGPIPE, not a
+        # failure worth reporting — so only complain when we read it all.
+        if drained and code:
+            detail = (stderr or "").strip().splitlines()
+            raise GitUnavailable(detail[-1] if detail else f"git exited {code}")
+
+
 def iter_added_blobs(repo: str, max_commits: int):
     """Yield (commit, path, added_text) for each file touched by each commit.
 
@@ -84,7 +123,7 @@ def iter_added_blobs(repo: str, max_commits: int):
     multi-line secret such as a PEM private key is still detectable — scanning
     line by line would never match its BEGIN/END envelope.
     """
-    log = _run_git(
+    log = _stream_git(
         repo,
         "log",
         f"--max-count={max_commits}",
@@ -107,7 +146,8 @@ def iter_added_blobs(repo: str, max_commits: int):
             return (commit, path, "\n".join(added))
         return None
 
-    for line in log.splitlines():
+    for raw in log:
+        line = raw.rstrip("\r\n")
         m = _COMMIT_RE.match(line)
         if m:
             pending = flush()
