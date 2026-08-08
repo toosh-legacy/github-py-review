@@ -10,6 +10,7 @@
     "https://api.github.com/*",
     "https://raw.githubusercontent.com/*"
   ],
+  "optional_host_permissions": ["https://*/*"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Repo Security Scanner"

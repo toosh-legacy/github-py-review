@@ -30,21 +30,57 @@ jobs:
           # Detector tests stub OSV; nothing in CI should depend on osv.dev.
           SECURITY_OFFLINE: "1"
 
+  self-scan:
+    # Dogfooding: the scanner runs on its own repository and blocks the build on
+    # a high-severity finding. .secscanignore covers the detector's own test
+    # fixtures, so a failure here is a real leak, not a fixture.
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # --history needs real history, not the default depth-1 clone.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Install eslint-plugin-security
+        run: npm install --no-audit --no-fund
+        working-directory: src/security/eslint
+      - name: Scan this repository (working tree + git history)
+        run: python -m security.cli . --history --fail-on high --no-color
+        env:
+          PYTHONPATH: src
+          LLM_BACKEND: mock
+
   docker-build:
     runs-on: ubuntu-latest
     needs: test
     steps:
       - uses: actions/checkout@v4
       - name: Build backend image
-        run: docker build -f deploy/Dockerfile -t code-review-copilot:ci .
+        run: docker build -f deploy/Dockerfile -t repo-security-scanner:ci .
+      # The image is only useful if its detectors are actually present; the
+      # Dockerfile asserts this at build time, and this re-checks at run time.
+      - name: Verify the detectors survived the build
+        run: |
+          docker run --rm repo-security-scanner:ci \
+            python -c "import sys; sys.path.insert(0, '/app/src'); \
+            from security.code_scan import _eslint_binary, _run_bandit; \
+            assert _eslint_binary(), 'eslint missing'; \
+            import shutil; assert shutil.which('node'), 'node missing'; \
+            print('detectors present in image')"
 
   deploy:
     runs-on: ubuntu-latest
-    needs: docker-build
+    needs: [self-scan, docker-build]
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-      # Deployment is gated on the main branch. Wire up your platform here, e.g.:
+      # Deployment is gated on main and on a clean self-scan. Wire up your
+      # platform here, e.g.:
       #   - uses: superfly/flyctl-actions/setup-flyctl@master
       #   - run: flyctl deploy --remote-only
       #     env:

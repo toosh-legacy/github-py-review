@@ -89,8 +89,11 @@
       <label>Backend: <input id="backend" placeholder="http://localhost:8001" /></label>
       <label>GitHub token (optional): <input id="ghToken" type="password" placeholder="ghp_… raises API limit" /></label>
       <button id="save">Save</button>
+      <div id="save-status" class="hint"></div>
       <div class="hint">
         Token is stored locally and only used to list and read repository files.
+        A non-localhost backend must be <code>https://</code> and will ask for
+        permission to reach that host.
       </div>
     </div>
     <script src="popup.js"></script>

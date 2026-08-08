@@ -1,8 +1,9 @@
 # Fly.io deploy config. Edit `app` to your Fly app name, then:
 #   fly launch --no-deploy   # (once, to create the app + a Postgres cluster)
-#   fly secrets set OPENAI_API_KEY=... OPENAI_MODEL=... GITHUB_TOKEN=...
+#   fly postgres attach <db> # injects DATABASE_URL
+#   fly secrets set OPENAI_API_KEY=... OPENAI_MODEL=...
 #   fly deploy
-app = "code-review-copilot"
+app = "repo-security-scanner"
 primary_region = "iad"
 
 [build]
@@ -10,8 +11,22 @@ primary_region = "iad"
   dockerfile = "deploy/Dockerfile"
 
 [env]
+  # The extension's service worker is not subject to CORS (it holds an explicit
+  # host permission), so this list only has to cover browser-page callers — i.e.
+  # the Streamlit dashboard, if you deploy one. Add its origin here.
   ALLOWED_ORIGINS = "https://github.com"
-  LLM_BACKEND = "openai"   # no local model server in the cloud
+
+  # No local model server in the cloud, so triage runs against OpenAI. Detection
+  # is unaffected either way: with no key the scan still runs and simply ships
+  # the rule-authored explanations instead of model-written ones.
+  LLM_BACKEND = "openai"
+  SECURITY_TRIAGE = "true"
+
+  # A scan posts whole file contents. The extension caps itself at 600 files /
+  # 12 MB; these are the server-side backstop against anything else.
+  MAX_SCAN_FILES = "2000"
+  MAX_SCAN_BYTES = "20000000"
+
   # DATABASE_URL is injected by `fly postgres attach`.
 
 [http_service]
@@ -26,3 +41,11 @@ primary_region = "iad"
     path = "/health"
     interval = "15s"
     timeout = "2s"
+
+[[vm]]
+  # Scans fork bandit and eslint over a temp copy of the repo and hold every
+  # submitted file in memory. The 256 MB default runs out on a large repo; a
+  # 330-file scan takes ~3s of mostly-CPU work, so the shared CPU is fine.
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

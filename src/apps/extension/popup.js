@@ -142,14 +142,45 @@ chrome.storage.local.get(["lastReview", "backendUrl", "ghToken"]).then((data) =>
   if (data.ghToken) document.getElementById("ghToken").value = data.ghToken;
 });
 
-document.getElementById("save").addEventListener("click", () => {
-  const url = document.getElementById("backend").value.trim();
-  const ghToken = document.getElementById("ghToken").value.trim();
-  chrome.storage.local.set({
-    backendUrl: url || "http://localhost:8001",
-    ghToken,
-  });
+// A deployed backend lives on a host the manifest cannot know at build time, so
+// only localhost is granted up front. Anything else is an optional permission
+// requested here — from a user gesture, which is the only context Chrome allows
+// — otherwise every scan against a hosted backend fails on a CORS-shaped error
+// that looks like the server is down.
+async function grantBackendAccess(url) {
+  let origin;
+  try {
+    origin = new URL(url).origin + "/*";
+  } catch {
+    return { ok: false, message: "That is not a valid URL." };
+  }
+  if (origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1")) {
+    return { ok: true };
+  }
+  if (!origin.startsWith("https://")) {
+    return { ok: false, message: "A remote backend must use https://." };
+  }
+  const granted = await chrome.permissions.request({ origins: [origin] });
+  return granted
+    ? { ok: true }
+    : { ok: false, message: "Permission denied — the extension cannot reach that host." };
+}
+
+document.getElementById("save").addEventListener("click", async () => {
   const btn = document.getElementById("save");
+  const status = document.getElementById("save-status");
+  const url = document.getElementById("backend").value.trim() || "http://localhost:8001";
+  const ghToken = document.getElementById("ghToken").value.trim();
+
+  const result = await grantBackendAccess(url);
+  if (!result.ok) {
+    status.textContent = result.message;
+    status.style.color = "#cf222e";
+    return;
+  }
+
+  await chrome.storage.local.set({ backendUrl: url, ghToken });
+  status.textContent = "";
   btn.textContent = "Saved";
   setTimeout(() => (btn.textContent = "Save"), 1500);
 });

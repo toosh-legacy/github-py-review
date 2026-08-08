@@ -10,6 +10,7 @@ than silently returning "no vulnerabilities", which would be a lie.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import httpx
@@ -20,6 +21,8 @@ OSV_API = "https://api.osv.dev"
 # requests. Findings past the cap are reported as a degraded detector.
 MAX_QUERIES = 1000
 MAX_VULN_DETAILS = 150
+# Enough to hide the round-trip latency without hammering a free public API.
+DETAIL_WORKERS = 8
 
 
 @dataclass(frozen=True)
@@ -81,23 +84,41 @@ def query_batch(
 def fetch_details(
     vuln_ids: list[str], *, timeout: float = 20.0, client: httpx.Client | None = None
 ) -> dict[str, dict]:
-    """Fetch the full OSV record for each id. Missing ids are simply absent."""
+    """Fetch the full OSV record for each id. Missing ids are simply absent.
+
+    Fetched concurrently: OSV has no batch detail endpoint, so a repo with a
+    large lockfile needs one request per vulnerability. Serially that is the
+    slowest part of a scan by an order of magnitude — 150 round trips at ~200ms
+    is half a minute, which is enough to trip an HTTP proxy timeout on the
+    /security/scan route.
+    """
     unique = list(dict.fromkeys(vuln_ids))[:MAX_VULN_DETAILS]
     if not unique:
         return {}
     owns_client = client is None
-    client = client or httpx.Client(timeout=timeout)
+    client = client or httpx.Client(
+        timeout=timeout,
+        # The pool has to be at least as wide as the worker count or the
+        # workers just queue against each other.
+        limits=httpx.Limits(max_connections=DETAIL_WORKERS),
+    )
     out: dict[str, dict] = {}
+
+    def fetch(vid: str) -> tuple[str, dict | None]:
+        try:
+            resp = client.get(f"{OSV_API}/v1/vulns/{vid}")
+            if resp.status_code != 200:
+                return vid, None
+            return vid, resp.json()
+        except (httpx.HTTPError, ValueError):
+            # One bad record shouldn't lose the other 149.
+            return vid, None
+
     try:
-        for vid in unique:
-            try:
-                resp = client.get(f"{OSV_API}/v1/vulns/{vid}")
-                if resp.status_code != 200:
-                    continue
-                out[vid] = resp.json()
-            except (httpx.HTTPError, ValueError):
-                # One bad record shouldn't lose the other 149.
-                continue
+        with ThreadPoolExecutor(max_workers=DETAIL_WORKERS) as pool:
+            for vid, record in pool.map(fetch, unique):
+                if record is not None:
+                    out[vid] = record
     finally:
         if owns_client:
             client.close()
