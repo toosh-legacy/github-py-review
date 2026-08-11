@@ -4,10 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "repo-security-scanner"
-version = "1.0.0"
+version = "1.1.0"
 description = "Scan a repository for exposed secrets, vulnerable dependencies, and unsafe code patterns — found by tools, triaged by an LLM."
 readme = "README.md"
-requires-python = ">=3.13"
+# 3.12, not 3.13. Ubuntu 24.04 LTS ships 3.12 and so does the default
+# `actions/setup-python`, so requiring 3.13 made `pip install` fail outright on
+# the runners this tool exists to be installed on. Nothing here needs 3.13: the
+# real floor is one backslash inside an f-string expression in cli.py (3.12),
+# and tomllib in deps.py (3.11). CI runs the suite on both versions.
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Tushaar Sood", email = "tushsood@gmail.com" }]
@@ -25,6 +30,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Security",
     "Topic :: Software Development :: Quality Assurance",
@@ -37,7 +43,6 @@ dependencies = [
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
     "httpx>=0.28,<1",
-    "langgraph>=1.2,<2",
     "bandit>=1.9,<2",
 ]
 
@@ -48,19 +53,40 @@ dependencies = [
 llm = ["openai>=1.59,<2"]
 
 [project.urls]
-Homepage = "https://github.com/tushaarsood/repo-security-scanner"
-Changelog = "https://github.com/tushaarsood/repo-security-scanner/blob/main/CHANGELOG.md"
-Issues = "https://github.com/tushaarsood/repo-security-scanner/issues"
+# The distribution is `repo-security-scanner` and the repository is
+# `github-py-review`; the two names differ because the project was renamed and
+# the remote was not. These URLs follow the remote, because that is where the
+# code, the issues and the container images actually are — `release.yml` pushes
+# to `ghcr.io/${{ github.repository }}`, so a Homepage pointing anywhere else
+# would send someone to a 404 from a package that does work.
+Homepage = "https://github.com/toosh-legacy/github-py-review"
+Changelog = "https://github.com/toosh-legacy/github-py-review/blob/main/CHANGELOG.md"
+Issues = "https://github.com/toosh-legacy/github-py-review/issues"
 
 [project.scripts]
 reposec = "reposec.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+# setuptools turns this on by default for pyproject-configured projects, and it
+# sweeps files out of package directories that were never declared — including
+# whatever `npm install` happens to have left under the eslint assets. What
+# ships must not depend on what the person building had lying around, so the
+# package-data list below is the whole of it.
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["reposec*"]
+# `include` fnmatches dotted names and `*` crosses the dots, and namespace
+# discovery is on by default — so on a checkout where `npm install` has been
+# run, setuptools finds 327 "namespace packages" under node_modules and ships
+# every stray .py in that tree inside the wheel, third-party licence and all.
+# Which files end up published then depends on whether the person building had
+# run npm. `eslint.config.mjs` and `package.json` still ship: they are declared
+# as package-data below, and `eslint` is a data directory, not a package.
+exclude = ["reposec.detectors.eslint*"]
+namespaces = false
 
 [tool.setuptools.package-data]
 # The eslint config ships with the wheel; node_modules does not — it is
@@ -80,3 +106,31 @@ testpaths = ["tests"]
 # Single import root: every package lives under src/.
 pythonpath = ["src"]
 addopts = "-q"
+markers = [
+    # tests/quality — measures the product (noise on real code, throughput)
+    # rather than a unit of it. Slow by construction: it shells out to bandit
+    # and eslint over hundreds of kLOC. Deselect with -m "not quality".
+    "quality: scores the scanner's precision and speed against real code",
+]
+
+[tool.coverage.run]
+source = ["src/reposec"]
+# Branch coverage matters more than line coverage here: most of the detector
+# logic is conditionals deciding whether something is a finding.
+branch = true
+# eslint's node_modules vendors a Python file that is not ours to cover.
+omit = ["*/node_modules/*"]
+
+[tool.coverage.report]
+show_missing = true
+# The fast suite measured 88% on 2026-08-11, after osv.py and llm.py went from
+# 25% to 100%. The gate sits a few points under that so refactoring that shifts
+# a little coverage around does not fail the build; it is here to catch a whole
+# module going untested, not to be ratcheted.
+fail_under = 85
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    'if __name__ == "__main__":',
+]

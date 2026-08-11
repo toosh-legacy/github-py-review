@@ -16,12 +16,31 @@ src/evaluation/security_benchmark/**
 # its fixtures under the name they had at the time, not the one they have now.
 src/ml/evaluation/security_benchmark/**
 
+# The live-fire harness builds the credentials it plants, so its source contains
+# a literal PEM private-key header and the provider prefixes the rules
+# fingerprint. (This comment says "PEM private-key header" rather than spelling
+# it out, because spelling it out made this file a finding — which is the rule
+# working correctly.) Every value it emits is generated at run time from
+# `secrets.token_*` — there is no key here, only the shape of one. Scoped to the
+# one file rather than to `src/evaluation/**`, so a real credential committed
+# anywhere else under evaluation is still reported.
+src/evaluation/run_live_eval.py
+
 # Documentation examples (README curl samples, the guide's walkthrough).
 docs/**:github-pat
 README.md:github-pat
 
-# The rule table itself contains example token shapes in its explanations.
+# The rule table itself contains example token shapes in its explanations. The
+# older path is where it lived before the package was renamed — `--history`
+# finds it under the name it had at the time, not the one it has now.
+src/reposec/detectors/rules.py
 src/security/rules.py
+
+# B104 fires on the literal "0.0.0.0" wherever it appears. In secrets.py it is
+# an entry in the set of hosts a connection string cannot meaningfully point at
+# — the detector reasoning about binding, not code binding to anything. Scoped
+# to the one rule so a real bind in this file would still be reported.
+src/reposec/detectors/secrets.py:B104
 
 # docker-compose ships throwaway local-dev Postgres credentials on purpose;
 # they are not reachable outside the compose network. The two older paths are

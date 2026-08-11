@@ -36,7 +36,7 @@ Three ideas hold the whole thing together:
 | # | File | What it is | Take away |
 |---|------|-----------|-----------|
 | 1 | `reposec/schemas.py` | `SecurityFinding` / `SecurityReport` | One shared contract; detector facts kept apart from model opinion |
-| 2 | `reposec/config.py` | pydantic-settings; all env in one `settings` | Nothing is required — a model only affects triage |
+| 2 | `reposec/config.py` | pydantic-settings; all env in one `settings` | Nothing is required — a model only affects triage; the scanned directory is never read for config |
 | 3 | `reposec/detectors/rules.py` | gitleaks-derived secret rules | Fingerprint rules need no entropy gate; generic ones are useless without it |
 | 4 | `reposec/detectors/secrets.py` | detector 1 + `scrub()` | Placeholder suppression is why the scanner stays usable; `scrub` is the redaction every path out uses |
 | 5 | `reposec/detectors/deps.py` | detector 2: manifests → OSV | Lockfiles beat manifests: an unresolved range is reported, never guessed |
@@ -46,7 +46,7 @@ Three ideas hold the whole thing together:
 | 9 | `reposec/prompts.py` | the triage prompts | The prompt says the finding list is closed — and `_apply` enforces it |
 | 10 | `reposec/llm.py` | `ChatLLM`, `NoLLM`, `get_llm()` | **The seam.** `NoLLM` is a real answer, not a stub that fabricates output |
 | 11 | `reposec/triage.py` | the LLM stage | `_apply` is the trust boundary: unknown ids dropped, skipped ids kept untriaged |
-| 12 | `reposec/graph.py` | the LangGraph pipeline | Detection nodes call no model at all; `redact_findings` runs before triage sees anything |
+| 12 | `reposec/pipeline.py` | the eight-stage scan pipeline | Detection stages call no model at all; `redact_findings` runs before triage sees anything |
 | 13 | `reposec/cli.py` | the command | Exit codes are the CI contract; `doctor` answers "what can actually run here" |
 | 14 | `tests/` | unit + contract + safety | `test_pipeline_safety.py` proves the pipeline can't write, fetch, or shell out |
 | 15 | `src/apps/extension/scanner.js` | the browser detector | Two detectors, no backend; rules generated from `rules.py` |
@@ -54,23 +54,33 @@ Three ideas hold the whole thing together:
 
 ## 3. The tech stack, and how we actually use it
 
-### LangGraph (pipeline orchestration)
-`reposec/graph.py` builds a `StateGraph` over a `TypedDict` state. Each node is
-a plain function taking and returning a slice of state; edges wire them into a
-fixed line. We use LangGraph for **structure and a safety boundary**, not for a
-swarm of autonomous agents — the pipeline can only ever return a report, and
-tests enforce that no node can write, fetch, or shell out.
+### The pipeline (`reposec/pipeline.py`)
+Eight stages in a tuple. Each is a plain function taking the accumulated state
+— a `TypedDict` — and returning only the keys it changed; the runner merges them
+in order. The whole orchestration layer is a four-line `for` loop.
 
-Note what the node *order* buys: the detection nodes are independent and could
+Note what the stage *order* buys: the detection stages are independent and could
 run in any order, but `redact_findings` must sit between them and
-`triage_findings`. It is the graph that makes "no raw credential reaches the
+`triage_findings`. That ordering is what makes "no raw credential reaches the
 model" a structural property rather than a rule each detector has to remember —
-and `test_pipeline_safety.py` asserts those two edges directly.
+and `test_pipeline_safety.py` asserts it directly, along with the property that
+nothing here can write, fetch, or shell out.
 
-> **LangChain vs LangGraph:** this project uses *LangGraph* (the graph runtime)
-> and talks to models through the **OpenAI SDK** directly (`llm.py`). It does not
-> use LangChain's chains/agents abstractions — deliberately, because the seam is
-> small and explicit.
+> **Why there is no framework here.** This was a LangGraph `StateGraph` until
+> 2026-08-11, and the graph had exactly the shape above: eight nodes, eight
+> unconditional edges, no branching, no checkpointing, no concurrency, no
+> interrupts. It bought a straight line for ~25 transitive packages and 1.30s of
+> import time per invocation (measured with `-X importtime`, against 0.17s for
+> the module that replaced it) — on a CLI that scans a small repository in about
+> two seconds. It also carried a leak: langgraph inherits langchain-core's global
+> tracer, which switches itself on from an ambient `LANGSMITH_TRACING` and
+> uploaded the verbatim scanned source, credentials included, to a third party.
+> That had to be suppressed by hand for as long as the dependency existed.
+>
+> Reach for an orchestration framework when you need what it does — conditional
+> edges, resumable state, fan-out. Paying for it to run a list is how a security
+> tool ends up with a supply chain it cannot vouch for. Models are reached
+> through the **OpenAI SDK** directly (`llm.py`), for the same reason.
 
 ### The three detectors (`reposec/detectors/`)
 Deterministic, precise, free — and the reason the product is trustworthy.
@@ -142,6 +152,40 @@ full of planted credentials — which every scanner in the world flags, includin
 GitHub's push protection and this one — so keeping it encoded means the repo
 contains no plaintext credential while the detector still sees the exact bytes.
 
+Three harnesses, answering three different questions:
+
+| Run | Question |
+|---|---|
+| `python src/evaluation/run_security_eval.py` | does it catch the planted bug, and stay off the decoy? |
+| `python src/evaluation/run_fp_eval.py` | how noisy is it on code nobody wrote for it? |
+| `python src/evaluation/run_perf_bench.py` | how fast is it, and which stage owns the time? |
+
+The labelled benchmark is 111 cases (47 planted, 51 decoys, 3 severity-ceiling
+cases, 4 decoy files, 6 dependency packages) and scores P 0.96 / R 1.00 / F 0.98
+overall. It is deliberately not 1.00: two code decoys fire from
+eslint-plugin-security's own conservatism, and they are recorded in the results
+as known failures rather than suppressed, because suppressing them means
+suppressing the upstream rule everywhere.
+
+That benchmark cannot answer the second question, because it was written
+alongside the rules it scores — a rule tuned to the fixture looks perfect on the
+fixture. `run_fp_eval.py` scores the detectors against the third-party packages
+installed in the current interpreter instead: real, published, reviewed code, no
+network and no vendored corpus. Currently **0 secret false positives over 424
+kLOC** and 0.23 code findings per kLOC, down from 0.50. Any secret hit counts
+against us, because a published package does not contain a live credential.
+
+`run_perf_bench.py` separates tree-walk throughput, a per-stage breakdown of one
+scan, and a linear-scaling check: ~3,000 files/s walking, ~70 kLOC/s on the pure
+Python path, growth factor 1.02 across 250→4,000 files. The number that decides
+where optimisation is worth anything: the analyzers are ~97% of a scan's wall
+time, so the interesting costs are all subprocess costs.
+
+Both are held in place by `tests/quality/`, a pytest suite marked `quality` that
+asserts budgets rather than printing numbers. It shells out to bandit and eslint
+over hundreds of kLOC, so it is slow and split out — `pytest -m quality` runs
+it, `pytest -m "not quality"` is the fast suite everyone runs before pushing.
+
 ### Packaging and CI
 - **Install:** `pip install repo-security-scanner` gives a `reposec` console
   script. Everything lives under one `reposec` package; installing top-level
@@ -149,12 +193,19 @@ contains no plaintext credential while the detector still sees the exact bytes.
   land-grab that collides with other distributions.
 - **Docker:** `deploy/Dockerfile` builds in two stages — a Node stage installs
   eslint-plugin-security, then the Python image copies in both the plugin and
-  the Node runtime. The build *asserts* the detectors are present rather than
-  shipping an image that silently degrades. It runs the scanner, not a server.
-- **CI:** ruff → pytest → JS parity → generated-rules freshness → **self-scan**
-  → docker build. The self-scan runs this scanner on this repository with
-  `--fail-on high` and uploads SARIF. It needs `fetch-depth: 0`, because a
-  depth-1 clone has no history to scan.
+  the Node runtime. The build then *scans a fixture repository with `--strict`*,
+  so an image whose bandit, eslint, OSV or git path cannot run fails to build.
+  `reposec doctor` cannot be that gate: it always exits 0 by design. It runs the
+  scanner, not a server.
+- **CI:** ruff → pytest (3.12 and 3.13) → quality budgets → JS parity →
+  generated-rules freshness → **self-scan** → docker build and image smoke test.
+  The self-scan runs this scanner on this repository with `--fail-on high` and
+  uploads SARIF. It needs `fetch-depth: 0`, because a depth-1 clone has no
+  history to scan. The image smoke test scans a bind-mounted fixture repository
+  with `--history --strict`, because the container runs as an unprivileged uid
+  the mounted files do not belong to and git refuses to read a repository it
+  thinks belongs to someone else — a refusal that degrades `--history` to
+  silence unless something makes it loud.
 
 The dogfooding is not decorative: it caught three high-severity CVEs in this
 project's own dependencies, and a ReDoS in its own `requirements.txt` parser.
@@ -172,16 +223,32 @@ reposec scan . --format sarif      # for GitHub code scanning
 
 # a real local model for triage (optional)
 ./deploy/setup_local_model.ps1     # pulls qwen2.5-coder:3b in Ollama
-#   .env:  LLM_BACKEND=local
+export LLM_BACKEND=local
 
 # the extension: load src/apps/extension/ unpacked at chrome://extensions
 
-# the benchmark
-python src/evaluation/run_security_eval.py
+# the three harnesses
+python src/evaluation/run_security_eval.py   # labelled benchmark
+python src/evaluation/run_fp_eval.py         # noise on real third-party code
+python src/evaluation/run_perf_bench.py      # throughput and stage breakdown
 
-# both test suites
-pytest && node --test tests/js/parity.test.mjs
+# the test suites
+pytest -m "not quality" && node --test tests/js/parity.test.mjs
+pytest -m quality                            # the budgets, slow
 ```
+
+Settings can live in a file instead of the environment, but the file is opt-in
+and named explicitly:
+
+```bash
+cp .env.example ~/.config/reposec/env
+export REPOSEC_ENV_FILE=~/.config/reposec/env
+```
+
+It is deliberately not a `.env` in the working directory. The working directory
+during a scan is a repository you may not trust, and a config file read out of
+it would let the thing being scanned choose the backend its own scan runs
+against.
 
 ## 5. Patterns worth keeping
 

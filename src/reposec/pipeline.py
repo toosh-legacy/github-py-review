@@ -1,25 +1,29 @@
-"""The LangGraph security-scan agent.
+"""The security-scan pipeline.
 
-    START → collect_files → scan_secrets → scan_dependencies → scan_code
-          → suppress_findings → redact_findings → triage_findings
-          → aggregate → END
+    collect_files → scan_secrets → scan_dependencies → scan_code
+                  → suppress_findings → redact_findings → triage_findings
+                  → aggregate
 
-The three scan nodes are the detection layer and contain no model calls at all —
+Eight stages in a straight line. Each takes the accumulated state and returns
+only the keys it changed; the runner merges them in order. That is the whole
+execution model, and it is deliberately this small — see `_PIPELINE` below for
+why it is not a graph framework.
+
+The three scan stages are the detection layer and contain no model calls at all —
 they are regex/entropy rules, manifest parsing against the OSV database, and two
-real linters. `triage_findings` is the only node that talks to an LLM, and it
+real linters. `triage_findings` is the only stage that talks to an LLM, and it
 can only narrow, reorder, or annotate what the detectors produced.
 
-**Authorization boundary:** unchanged from the review graph. No node here can
-post, merge, write to a repository, or modify anything; the agent returns a
-`SecurityReport` and nothing else. Files arrive as request payload — the graph
-never fetches them, so it has no network reach into the user's repositories.
+**Authorization boundary:** no stage here can post, merge, write to a repository,
+or modify anything; the pipeline returns a `SecurityReport` and nothing else.
+Files arrive as an argument — the pipeline never fetches them, so it has no
+network reach into the user's repositories.
 """
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import TypedDict
-
-from langgraph.graph import END, START, StateGraph
 
 from reposec.detectors.common import is_scannable, looks_binary, snippet
 from reposec.schemas import SecurityFinding, SecurityReport
@@ -28,6 +32,14 @@ from reposec.schemas import SecurityFinding, SecurityReport
 class SecurityState(TypedDict, total=False):
     repo: str | None
     files: list[tuple[str, str]]
+    # Per-scan overrides for the two settings a command-line flag can change.
+    # They travel in the state rather than being written onto the `settings`
+    # singleton, because that singleton is process-global and cached: a single
+    # `--offline` run would otherwise leave every later scan in the same
+    # process offline, including in the test suite and in any long-lived host
+    # that imports `run_security_scan` as a library.
+    offline: bool | None
+    triage: bool | None
     findings: list[SecurityFinding]
     degraded: list[str]
     suppressed: int
@@ -63,12 +75,19 @@ def _scan_secrets(state: SecurityState) -> SecurityState:
     return {"findings": state.get("findings", []) + found}
 
 
-def _scan_dependencies(state: SecurityState) -> SecurityState:
+def _resolve(state: SecurityState, key: str, setting: str) -> bool:
+    """A per-scan override if one was passed, otherwise the configured default."""
     from reposec.config import settings
+
+    override = state.get(key)
+    return getattr(settings, setting) if override is None else override
+
+
+def _scan_dependencies(state: SecurityState) -> SecurityState:
     from reposec.detectors.deps import scan_dependencies
 
     found, degraded = scan_dependencies(
-        state.get("files", []), offline=settings.security_offline
+        state.get("files", []), offline=_resolve(state, "offline", "security_offline")
     )
     return {
         "findings": state.get("findings", []) + found,
@@ -104,7 +123,7 @@ def _redact(state: SecurityState) -> SecurityState:
 
     The secret detector redacts its own evidence, but bandit and eslint quote
     raw source lines — and a hardcoded token is exactly the kind of line they
-    quote. This node is what makes "the raw secret is never stored and never
+    quote. This stage is what makes "the raw secret is never stored and never
     sent to the model" true of the whole pipeline rather than of one detector.
     """
     from reposec.detectors.secrets import scrub
@@ -153,7 +172,12 @@ def _triage(state: SecurityState) -> SecurityState:
 
     findings = state.get("findings", [])
     contexts = _build_contexts(state.get("files", []), findings)
-    ranked, tokens = triage(findings, contexts, repo=state.get("repo"))
+    ranked, tokens = triage(
+        findings,
+        contexts,
+        repo=state.get("repo"),
+        enabled=_resolve(state, "triage", "security_triage"),
+    )
     return {
         "findings": ranked,
         "tokens_used": state.get("tokens_used", 0) + tokens,
@@ -200,37 +224,68 @@ def _aggregate(state: SecurityState) -> SecurityState:
     }
 
 
-def build_security_graph():
-    g = StateGraph(SecurityState)
-    g.add_node("collect_files", _collect)
-    g.add_node("scan_secrets", _scan_secrets)
-    g.add_node("scan_dependencies", _scan_dependencies)
-    g.add_node("scan_code", _scan_code)
-    g.add_node("suppress_findings", _suppress)
-    g.add_node("redact_findings", _redact)
-    g.add_node("triage_findings", _triage)
-    g.add_node("aggregate", _aggregate)
+Stage = Callable[[SecurityState], SecurityState]
 
-    g.add_edge(START, "collect_files")
-    g.add_edge("collect_files", "scan_secrets")
-    g.add_edge("scan_secrets", "scan_dependencies")
-    g.add_edge("scan_dependencies", "scan_code")
-    g.add_edge("scan_code", "suppress_findings")
-    g.add_edge("suppress_findings", "redact_findings")
-    g.add_edge("redact_findings", "triage_findings")
-    g.add_edge("triage_findings", "aggregate")
-    g.add_edge("aggregate", END)
-    return g.compile()
+# The pipeline, in execution order. This was a compiled LangGraph `StateGraph`
+# for most of the project's life, and the graph had exactly this shape: eight
+# nodes, eight unconditional edges, no branching, no checkpointing, no
+# concurrency, no interrupts, no human-in-the-loop. Nothing about the scan is
+# graph-shaped, so the framework bought a straight line at three prices:
+#
+#   ~25 transitive packages, which is a poor look in a tool that sells
+#   dependency hygiene and a real supply-chain surface in a security scanner;
+#
+#   1.30s of import time on every invocation — measured with `-X importtime`,
+#   against 0.17s for this whole module — on a CLI whose end-to-end scan of a
+#   small repository is about two seconds;
+#
+#   and a leak: langgraph inherits langchain-core's global tracer, which
+#   activates from an ambient LANGSMITH_TRACING and uploaded the verbatim
+#   scanned source, credentials included, to a third party. That had to be
+#   pinned off by hand for as long as the dependency existed. A list of
+#   functions cannot do it at all.
+#
+# The ordering *is* the security guarantee — redaction before triage is what
+# keeps raw credentials away from the model — so it is declared in one place and
+# asserted in tests/test_pipeline_safety.py.
+_PIPELINE: tuple[tuple[str, Stage], ...] = (
+    ("collect_files", _collect),
+    ("scan_secrets", _scan_secrets),
+    ("scan_dependencies", _scan_dependencies),
+    ("scan_code", _scan_code),
+    ("suppress_findings", _suppress),
+    ("redact_findings", _redact),
+    ("triage_findings", _triage),
+    ("aggregate", _aggregate),
+)
+
+STAGE_NAMES: tuple[str, ...] = tuple(name for name, _ in _PIPELINE)
 
 
-_SECURITY_GRAPH = build_security_graph()
+def run_pipeline(state: SecurityState) -> SecurityState:
+    """Run every stage in order, merging each one's output into the state.
+
+    Last write wins, per key — the same reducer semantics the graph used for
+    unannotated state keys, so stages that accumulate (`findings`, `degraded`)
+    read the previous value and return the extended list themselves.
+    """
+    for _name, stage in _PIPELINE:
+        state = {**state, **stage(state)}
+    return state
 
 
 def run_security_scan(
-    *, files: list[tuple[str, str]], repo: str | None = None
+    *,
+    files: list[tuple[str, str]],
+    repo: str | None = None,
+    offline: bool | None = None,
+    triage: bool | None = None,
 ) -> SecurityReport:
+    """Scan `files` and return the report. Nothing leaves this process."""
     started = time.perf_counter()
-    final: SecurityState = _SECURITY_GRAPH.invoke({"files": files, "repo": repo})
+    final = run_pipeline(
+        {"files": files, "repo": repo, "offline": offline, "triage": triage}
+    )
     latency_ms = int((time.perf_counter() - started) * 1000)
     return SecurityReport(
         summary=final.get("summary", "No security findings."),

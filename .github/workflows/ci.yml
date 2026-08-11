@@ -8,11 +8,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # requires-python claims 3.12, so 3.12 is tested. The floor is not
+    # cosmetic: tomllib puts it at 3.11 and one f-string is the only thing
+    # holding it at 3.12, which is exactly the kind of claim that rots unless a
+    # job runs it. The other jobs stay on one version — they build artifacts,
+    # and building them twice proves nothing.
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
       - name: Install
         run: |
           pip install -r requirements-dev.txt
@@ -26,10 +34,19 @@ jobs:
       - name: Compile check
         run: python -m compileall -q src
       - name: Python tests
-        run: pytest
+        run: pytest -m "not quality" --cov=reposec --cov-report=term-missing --cov-fail-under=85
         env:
           LLM_BACKEND: mock
           # The detector tests stub OSV; nothing in CI should depend on osv.dev.
+          SECURITY_OFFLINE: "1"
+      # Split out because it is slow (~2 min) and measures the product rather
+      # than a unit of it: false positives against installed third-party
+      # packages, plus a throughput benchmark. Runs after the eslint install
+      # because it scores the JS analyzer too.
+      - name: Quality tests (precision and performance)
+        run: pytest -m quality
+        env:
+          LLM_BACKEND: mock
           SECURITY_OFFLINE: "1"
       # The browser scanner is a second implementation of the secret rules, so
       # it is scored against the same benchmark the Python one is.
@@ -93,3 +110,28 @@ jobs:
       # asserts that at build time; this proves it can actually scan.
       - name: The image can scan
         run: docker run --rm -v "$PWD:/repo:ro" reposec:ci scan /repo --fail-on high --no-color
+      # The build-time self-test runs as root over root-owned files, so it
+      # cannot catch the failure this step exists for: the container runs as uid
+      # 10001 while a bind mount carries the host's ownership, and git refuses
+      # to read a repository it thinks belongs to someone else. `is_repo()`
+      # swallows that refusal, so --history degrades to zero findings and the
+      # run still exits 0. --strict turns the degraded note into exit 3.
+      #
+      # A throwaway fixture rather than /repo, because --strict would exit 3 on
+      # this repository for an unrelated reason the self-scan job already
+      # documents: pyproject declares ranges that no lockfile resolves. The
+      # fixture pins its one requirement so the dependency detector resolves it,
+      # and carries a Python and a JS file so bandit and eslint have work to do.
+      - name: The image can scan a bind-mounted repository's history
+        run: |
+          fixture="$RUNNER_TEMP/history-fixture"
+          mkdir -p "$fixture"
+          cd "$fixture"
+          git init -q .
+          printf 'import os\nos.system("ls " + input())\n' > a.py
+          printf 'eval(x);\n' > a.js
+          printf 'flask==0.12.2\n' > requirements.txt
+          git add -A
+          git -c user.email=ci@example.com -c user.name=ci commit -qm init
+          docker run --rm -v "$fixture:/repo:ro" reposec:ci \
+            scan /repo --history --strict --no-color

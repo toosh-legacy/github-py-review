@@ -5,19 +5,21 @@
 ```bash
 python -m venv .venv
 pip install -r requirements-dev.txt
-cd src/security/eslint && npm install && cd -   # enables the JS/TS detector
+cd src/reposec/detectors/eslint && npm install && cd -   # enables the JS/TS detector
 ```
 
 ## Before you push
 
 ```bash
 ruff check .
-pytest
-python -m security.cli . --history --fail-on high   # what CI gates on
+pytest -m "not quality"                  # the fast suite
+reposec scan . --history --fail-on high  # what CI gates on
 ```
 
-CI runs the same three, plus a Docker build that asserts the image's detectors
-are present.
+CI runs the same three, plus `pytest -m quality` (noise on real third-party code
+and a throughput budget — slow, so it is not in the fast suite) and a Docker
+build that scans a fixture with `--strict`, so an image whose detectors cannot
+run fails the build.
 
 ## The one rule that matters
 
@@ -26,7 +28,7 @@ will not be merged, however well it works on your example. Detection has to be
 reproducible and explainable — "bandit rule B608 fired on line 12" is something
 a user can act on and argue with; "the model thought so" is not.
 
-The model's authority is bounded in `security/triage.py:_apply`, in code rather
+The model's authority is bounded in `reposec/triage.py:_apply`, in code rather
 than in the prompt. If you widen it, the tests there should tell you why that is
 hard to do safely.
 
@@ -47,8 +49,18 @@ Then update `ground_truth.json` and run:
 python src/evaluation/run_security_eval.py
 ```
 
-`tests/test_security_benchmark.py` enforces the floors, so a rule that drops
-precision fails CI rather than shipping.
+`tests/test_benchmark.py` enforces the floors, so a rule that drops precision
+fails CI rather than shipping.
+
+The benchmark cannot tell you whether a rule is quiet on code nobody wrote for
+it, because it was written alongside the rules it scores. For that, run the rule
+over real third-party code:
+
+```bash
+python src/evaluation/run_fp_eval.py
+```
+
+`tests/quality/` holds the budget that run has to stay inside.
 
 For secret rules specifically: a *fingerprint* rule (a distinctive provider
 prefix like `AKIA…`) needs no entropy gate. A *contextual* rule matching

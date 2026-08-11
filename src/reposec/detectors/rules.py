@@ -317,9 +317,25 @@ CONTEXTUAL_RULES: list[SecretRule] = [
         _r(
             _ASSIGN.format(
                 names=(
-                    r"api[_-]?key|apikey|api[_-]?secret|access[_-]?token|"
+                    # A leading qualifier is optional and unconstrained, which
+                    # is what closes the gap this list had: the enumerated forms
+                    # below caught `SECRET_KEY` and `ACCESS_TOKEN` but missed
+                    # `JWT_SIGNING_SECRET`, `WEBHOOK_SECRET`, `SESSION_TOKEN`
+                    # and `ENCRYPTION_KEY` — names at least as common, and named
+                    # after the thing they protect rather than after the vendor.
+                    # Measured: a 48-character random value assigned to
+                    # `JWT_SIGNING_SECRET` went unreported at entropy 5.33.
+                    #
+                    # The widening is safe because the name is never the whole
+                    # test. Every match still has to clear 16 characters, an
+                    # entropy floor of 3.6, and the placeholder filter — which is
+                    # what stops `token = "identifier"` in a parser from firing.
+                    r"(?:[a-z0-9]+[_-]){0,3}"
+                    r"(?:api[_-]?keys?|apikey|api[_-]?secret|access[_-]?token|"
                     r"auth[_-]?token|client[_-]?secret|secret[_-]?key|"
-                    r"private[_-]?token|session[_-]?secret|app[_-]?secret"
+                    r"private[_-]?token|session[_-]?secret|app[_-]?secret|"
+                    r"secret|token|passphrase|"
+                    r"signing[_-]?key|encryption[_-]?key|master[_-]?key)"
                 ),
                 min_len=16,
             )
@@ -341,7 +357,15 @@ CONTEXTUAL_RULES: list[SecretRule] = [
         "Hardcoded password",
         _r(
             _ASSIGN.format(
-                names=r"password|passwd|pwd|db[_-]?pass|admin[_-]?pass",
+                # Same optional qualifier as the generic rule above, for the
+                # same reason: `DB_PASSWORD`, `ADMIN_PASSWORD` and
+                # `SMTP_PASSWORD` were missed while a bare `password` was
+                # caught. The entropy floor and the 8-character minimum are what
+                # keep the widening quiet.
+                names=(
+                    r"(?:[a-z0-9]+[_-]){0,3}"
+                    r"(?:password|passwd|pwd|pass)"
+                ),
                 min_len=8,
             )
         ),

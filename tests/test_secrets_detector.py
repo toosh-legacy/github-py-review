@@ -159,6 +159,137 @@ def test_entropy_findings_in_docs_are_downgraded_not_dropped():
     assert "documentation file" in findings[0].explanation
 
 
+# --------------------------------------------------------------------------- #
+# Test trees
+#
+# Measured on real repositories with `run_live_eval.py`: after documentation,
+# test fixtures are where credential-shaped strings legitimately live. The five
+# `high` private-key findings this produced on psf/requests and axios — every
+# one a self-signed fixture cert — would fail `--fail-on high` on two of the
+# most audited repositories in open source.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/certs/valid/server/server.key",
+        "test/fixtures/client.pem",
+        "spec/support/ca.crt",
+        "__tests__/keys/id_rsa.pem",
+    ],
+)
+def test_fixture_key_files_in_test_trees_are_not_reported(path):
+    assert scan_file(path, PRIVATE_KEY) == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "app/keys/production.pem",  # a key file, but not under a test tree
+        "tests/test_auth.py",  # a test tree, but not a key file
+    ],
+)
+def test_a_private_key_anywhere_else_is_still_high(path):
+    findings = scan_file(path, PRIVATE_KEY)
+    assert [f.severity for f in findings] == ["high"]
+
+
+def test_entropy_findings_in_tests_are_downgraded_not_dropped():
+    findings = scan_file("tests/test_client.py", f'API_KEY = "{HIGH_ENTROPY}"')
+    assert [f.severity for f in findings] == ["low"]
+    assert "test file" in findings[0].explanation
+
+
+def test_a_provider_token_in_a_test_keeps_its_severity():
+    # The same asymmetry as documentation: an `AKIA…` committed to a test file
+    # is a live AWS key that someone will find.
+    findings = scan_file("tests/test_aws.py", f'key = "{GITHUB_PAT}"')
+    assert [f.severity for f in findings] == ["high"]
+
+
+# --------------------------------------------------------------------------- #
+# Generic name coverage
+#
+# The enumerated name list caught `SECRET_KEY` and `ACCESS_TOKEN` but missed
+# names formed from what the secret protects rather than from a vendor. Found by
+# planting a 48-character random value in real code: it went unreported at
+# entropy 5.33.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "name",
+    [
+        "JWT_SIGNING_SECRET", "WEBHOOK_SECRET", "SESSION_TOKEN",
+        "ENCRYPTION_KEY", "MASTER_KEY", "refresh_token", "stripe_api_key",
+    ],
+)
+def test_qualified_secret_names_are_covered(name):
+    findings = scan_file("app/config.py", f'{name} = "{HIGH_ENTROPY}"')
+    assert findings, f"{name} assigned a high-entropy value went unreported"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'token = "IDENTIFIER_NAME"',                    # a lexer token, low entropy
+        'token = "application/json;charset=utf-8"',     # a header value
+        'SECRET = "${DJANGO_SECRET}"',                  # a template
+        'api_key = "<your-api-key-here>"',              # a placeholder
+        'SIGNING_KEY = "changeme-please-changeme"',     # a documented fake
+    ],
+)
+def test_widening_the_name_list_did_not_widen_the_noise(line):
+    assert scan_file("app/config.py", line) == []
+
+
+# --------------------------------------------------------------------------- #
+# Segment entropy must not silence real credentials
+#
+# `/` and `+` are in the base64 alphabet, so a real AWS secret key contains a
+# slash about 40% of the time. Scoring segments unconditionally left those
+# segments too short to clear the gate — and because `scrub()` shares the same
+# measure, the key stopped being *redacted* too, which put it in the report,
+# the terminal and the model prompt.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("line", "value"),
+    [
+        # base64 with slashes — the AWS-key shape
+        ('SECRET_KEY = "{}"', "2O76UMFxFkM/R5Kjp1vRt+1fjORS/6ilI8ihN5KX"),
+        ('SECRET_KEY = "{}"', "a3f9c2/8b1d7e4/06fa2c9/3d5e8b1"),
+        # every segment too short for its entropy to mean anything. Named
+        # `password` because at 15 characters it is under the generic rule's
+        # 16-character floor, which is a length decision, not an entropy one.
+        ('password = "{}"', "Kj8.mQ2.pL9.xR4"),
+    ],
+)
+def test_a_separator_inside_random_material_does_not_hide_it(line, value):
+    assert scan_file("app/config.py", line.format(value)), (
+        f"{value!r} was silenced by segment-wise entropy"
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ["DB_PASSWORD", "ADMIN_PASSWORD", "smtp_password", "password"]
+)
+def test_qualified_password_names_are_covered(name):
+    assert scan_file("app/config.py", f'{name} = "{HIGH_ENTROPY}"')
+
+
+def test_scrub_masks_a_credential_containing_separators():
+    # The security-critical half: scrub decides what reaches the model prompt.
+    masked = scrub('SECRET_KEY = "a3f9c2/8b1d7e4/06fa2c9/3d5e8b1"')
+    assert "a3f9c2/8b1d7e4/06fa2c9/3d5e8b1" not in masked
+    assert "***" in masked
+
+
+def test_a_fingerprinted_token_is_reported_once_not_twice():
+    # The generic rule's name list includes `token`, and a real PAT clears the
+    # entropy floor — so without the fingerprint taking precedence, one leaked
+    # credential is reported as two problems at two severities with two
+    # different remediations.
+    findings = scan_file("app/gh.py", f'token = "{GITHUB_PAT}"')
+    assert [f.rule_id for f in findings] == ["github-pat"]
+
+
 def test_a_provider_token_in_docs_keeps_its_severity():
     # A real GitHub PAT is a live credential wherever it sits. Only the
     # entropy-gated rules get the documentation discount.
@@ -179,3 +310,90 @@ def test_documentation_paths_are_recognised(path):
 def test_ordinary_source_is_not_downgraded():
     findings = scan_file("app/config.py", f'API_KEY = "{HIGH_ENTROPY}"')
     assert findings and findings[0].severity == "medium"
+
+
+# --------------------------------------------------------------------------- #
+# Connection strings
+#
+# Found by scanning 420 kLOC of installed packages: every one of the 15 secret
+# findings was a driver docstring showing the URL format. The password and the
+# host carry the signal, not the URL as a whole.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgres://app:password@db.example.com:5432/appdb",
+        "mysql://scott:tiger@localhost/test",
+        "mysql+pymysql://user:pass@hostname/dbname?charset=utf8mb4",
+        "redis://admin:admin@127.0.0.1:6379/0",
+        "mongodb://svc:${MONGO_PASSWORD}@warehouse/events",
+        "postgres://deploy:deploy@db.internal/orders",
+    ],
+)
+def test_illustrative_connection_strings_are_not_reported(url):
+    assert scan_file("app/db.py", f'DSN = "{url}"') == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # libpq's own documented form: the host moves into a query parameter,
+        # so the authority's host component is empty. Taken verbatim from
+        # psycopg2's and asyncpg's docstrings, which this rule reported as six
+        # leaked credentials until the host was allowed to be empty.
+        "postgresql+psycopg2://user:password@/dbname?host=HostA",
+        "postgresql+asyncpg://user:password@/dbname?host=/var/run/postgresql",
+        "postgresql://user:password@/dbname?host=/tmp&port=5433",
+    ],
+)
+def test_a_hostless_connection_string_is_judged_on_its_password(url):
+    assert scan_file("app/db.py", f'DSN = "{url}"') == []
+
+
+def test_a_hostless_connection_string_with_a_real_password_still_fires():
+    # The other half: widening the host must not have widened the *drop*. Only
+    # the illustrative password made those docstrings quiet.
+    findings = scan_file(
+        "app/db.py", 'DSN = "postgresql://svc:Hn4pV2xQmL8w@/orders?host=/tmp"'
+    )
+    assert [f.rule_id for f in findings] == ["database-connection-string"]
+    assert findings[0].severity == "high"
+
+
+def test_a_real_connection_string_is_still_reported():
+    findings = scan_file("app/db.py", f'DSN = "{POSTGRES_URL}"')
+    assert [f.rule_id for f in findings] == ["database-connection-string"]
+    assert findings[0].severity == "high"
+
+
+def test_a_private_network_connection_string_is_ranked_lower():
+    # Still worth reporting — the password may be reused — but it is not the
+    # internet-reachable data access the rule's high severity describes.
+    findings = scan_file("app/db.py", 'DSN = "postgres://svc:Hn4pV2xQmL8w@10.4.1.9/o"')
+    assert [f.severity for f in findings] == ["medium"]
+    assert "private network" in findings[0].explanation
+
+
+# --------------------------------------------------------------------------- #
+# Structured names vs. random material
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "value",
+    [
+        "AES/CBC/PKCS5Padding",
+        "django.core.signing.TimestampSigner",
+        "connect.sid.signed.v2.rolling",
+        "com.example.service.AuthTokenProvider",
+    ],
+)
+def test_dotted_and_slashed_names_are_not_secrets(value):
+    # Joining ordinary words with separators clears any whole-string entropy
+    # floor. Each segment on its own is a word, which is the actual question.
+    assert scan_file("app/config.py", f'SECRET_KEY = "{value}"') == []
+
+
+def test_a_separator_does_not_hide_a_real_secret():
+    # The guard scores the most random-looking segment, so padding a credential
+    # with dots does not get it past the entropy gate.
+    findings = scan_file("app/config.py", f'API_KEY = "{HIGH_ENTROPY}.v2"')
+    assert [f.rule_id for f in findings] == ["generic-api-key"]

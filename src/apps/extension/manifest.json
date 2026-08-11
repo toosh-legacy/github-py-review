@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "reposec — repo security scanner",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Scan any GitHub repo for exposed secrets and vulnerable dependencies. Runs entirely in your browser — no server, no upload.",
   "icons": {
     "16": "icons/icon16.png",

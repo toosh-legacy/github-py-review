@@ -163,7 +163,7 @@ def test_ordinary_paths_are_normalized():
 
 def test_missing_bandit_degrades_instead_of_reporting_clean(monkeypatch):
     monkeypatch.setattr(
-        code, "_run_bandit", lambda root: ([], "bandit is not installed")
+        code, "_run_bandit", lambda root, **_: ([], "bandit is not installed")
     )
     findings, degraded = scan_code([("app/db.py", VULNERABLE_PY)])
     assert findings == []

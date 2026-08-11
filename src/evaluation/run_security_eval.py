@@ -134,10 +134,21 @@ def _near(finding, entry, tol: int) -> bool:
     )
 
 
-def score_locations(findings, truth: dict) -> tuple[Score, Score]:
-    """Score secrets and code findings against planted sites and decoys."""
+_SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
+def score_locations(findings, truth: dict) -> tuple[Score, Score, list[str]]:
+    """Score secrets and code findings against planted sites and decoys.
+
+    Returns (secret score, code score, notes). Notes carry the failures that are
+    not misses and not false positives: a real credential that was found but
+    ranked 'low', or a documentation illustration that was found and ranked
+    'high'. Both are detection successes and reporting failures, and a scanner
+    is only as useful as its ordering.
+    """
     tol = truth["line_tolerance"]
     scores = {"secret": Score(), "code": Score()}
+    notes: list[str] = []
 
     for entry in truth["planted"]:
         cat = entry["category"]
@@ -153,12 +164,37 @@ def score_locations(findings, truth: dict) -> tuple[Score, Score]:
         label = f"{entry['file']}:{entry['line']} {entry['why']}"
         (scores[cat].caught if hit else scores[cat].missed).append(label)
 
+        expected = entry.get("expect_severity")
+        if hit and expected and _SEVERITY_RANK[hit.severity] > _SEVERITY_RANK[expected]:
+            notes.append(
+                f"{entry['file']}:{entry['line']} was found but ranked "
+                f"'{hit.severity}', below the expected '{expected}'"
+            )
+
     for entry in truth["decoys"]:
         cat = entry["category"]
         hit = next((f for f in findings if _near(f, entry, tol)), None)
         if hit:
+            known = entry.get("known_failure")
+            suffix = f" [known: {known}]" if known else ""
             scores[cat].false_positives.append(
-                f"{entry['file']}:{entry['line']} fired {hit.rule_id} — {entry['why']}"
+                f"{entry['file']}:{entry['line']} fired {hit.rule_id} — "
+                f"{entry['why']}{suffix}"
+            )
+
+    # Findings that must appear, but quietly. Scored apart from precision: they
+    # are not false positives, they are correct findings with a severity claim.
+    for entry in truth.get("downgraded", []):
+        hit = next((f for f in findings if _near(f, entry, tol)), None)
+        if hit is None:
+            notes.append(
+                f"{entry['file']}:{entry['line']} produced no finding at all — "
+                f"expected one, ranked no higher than '{entry['max_severity']}'"
+            )
+        elif _SEVERITY_RANK[hit.severity] < _SEVERITY_RANK[entry["max_severity"]]:
+            notes.append(
+                f"{entry['file']}:{entry['line']} was ranked '{hit.severity}', "
+                f"above the '{entry['max_severity']}' ceiling for {entry['why']}"
             )
 
     # A finding anywhere in a decoy file is a false positive by definition.
@@ -171,7 +207,7 @@ def score_locations(findings, truth: dict) -> tuple[Score, Score]:
                         f"{f.file}:{f.line_start} fired {f.rule_id} — {entry['why']}"
                     )
 
-    return scores["secret"], scores["code"]
+    return scores["secret"], scores["code"], notes
 
 
 def score_dependencies(findings, report, truth: dict) -> tuple[Score, list[str]]:
@@ -281,14 +317,15 @@ def main() -> None:
     # Detection is what the detector score measures; the LLM must not be in it.
     settings.security_triage = False
 
-    from reposec.graph import run_security_scan
+    from reposec.pipeline import run_security_scan
 
     files = load_repo()
     truth = load_ground_truth()
 
     baseline = run_security_scan(files=files, repo="benchmark/fixture")
-    secret_score, code_score = score_locations(baseline.findings, truth)
+    secret_score, code_score, severity_notes = score_locations(baseline.findings, truth)
     dep_score, dep_notes = score_dependencies(baseline.findings, baseline, truth)
+    notes = severity_notes + dep_notes
 
     overall = Score(
         caught=secret_score.caught + code_score.caught + dep_score.caught,
@@ -314,7 +351,7 @@ def main() -> None:
     for label, items in (
         ("MISSED", overall.missed),
         ("FALSE POSITIVES", overall.false_positives),
-        ("NOTES", dep_notes),
+        ("SEVERITY AND DEPENDENCY NOTES", notes),
     ):
         if items:
             print(f"\n{label}")
@@ -329,9 +366,19 @@ def main() -> None:
             "overall": overall.as_dict(),
         },
         "degraded": baseline.degraded,
+        "labelled_cases": (
+            len(truth["planted"])
+            + len(truth["decoys"])
+            + len(truth.get("downgraded", []))
+            + len(truth["decoy_files"])
+            + sum(
+                len(truth["dependencies"][k])
+                for k in ("vulnerable_packages", "clean_packages", "unresolved_packages")
+            )
+        ),
         "missed": overall.missed,
         "false_positives": overall.false_positives,
-        "notes": dep_notes,
+        "notes": notes,
         "latency_ms": baseline.latency_ms,
     }
 

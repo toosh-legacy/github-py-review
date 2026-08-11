@@ -5,6 +5,7 @@
     reposec scan . --fail-on high      exit 1 for CI
     reposec scan . --format sarif      upload to GitHub code scanning
     reposec doctor                     which detectors are available, and why not
+    reposec install-eslint             add the JS/TS analyzer
 
 Exit codes are the CI contract, so they are stable:
 
@@ -19,6 +20,8 @@ import argparse
 import os
 import sys
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from reposec.schemas import SecurityReport
 
@@ -50,8 +53,24 @@ def _version() -> str:
 # --------------------------------------------------------------------------- #
 # Reading the working tree
 # --------------------------------------------------------------------------- #
-def read_repo(root: Path, max_bytes: int) -> list[tuple[str, str]]:
+# The whole working tree is held in memory, and the code detector then builds a
+# second filtered list of the same strings — so peak usage is roughly twice this
+# number. 256 MB of source is on the order of eight million lines, far past any
+# repository a person scans interactively, and it is the difference between
+# "scanned the first 256 MB, here is what was skipped" and being OOM-killed with
+# no output at all. Raise it with --max-total-bytes.
+DEFAULT_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+
+
+def read_repo(
+    root: Path, max_bytes: int, max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES
+) -> tuple[list[tuple[str, str]], list[str]]:
     """Read the working tree, honouring the detectors' own filters.
+
+    Returns (files, notes). `notes` is non-empty only when the aggregate budget
+    was reached, and is reported as a degraded detector — a scan that quietly
+    covered part of a repository is the exact failure this tool reports in other
+    people's code.
 
     Directories are pruned during the walk rather than filtered afterwards. On
     this repository a naive `rglob("*")` visits ~22,000 entries to keep 161 —
@@ -62,6 +81,8 @@ def read_repo(root: Path, max_bytes: int) -> list[tuple[str, str]]:
     from reposec.detectors.common import VENDOR_DIRS, is_scannable, looks_binary
 
     files: list[tuple[str, str]] = []
+    total = 0
+    over_budget = 0
     for dirpath, dirnames, filenames in os.walk(root):
         # Mutating dirnames in place is what stops os.walk descending.
         dirnames[:] = sorted(d for d in dirnames if d not in VENDOR_DIRS)
@@ -72,7 +93,14 @@ def read_repo(root: Path, max_bytes: int) -> list[tuple[str, str]]:
             if not is_scannable(rel):
                 continue
             try:
-                if path.stat().st_size > max_bytes:
+                size = path.stat().st_size
+                if size > max_bytes:
+                    continue
+                if total + size > max_total_bytes:
+                    # Keep walking rather than breaking out: stat is cheap and
+                    # reading is not, so this costs little and lets the note say
+                    # how much of the repository went unscanned.
+                    over_budget += 1
                     continue
                 content = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError, ValueError):
@@ -81,8 +109,22 @@ def read_repo(root: Path, max_bytes: int) -> list[tuple[str, str]]:
                 continue
             if looks_binary(content):
                 continue
+            total += size
             files.append((rel, content))
-    return files
+
+    notes: list[str] = []
+    if over_budget:
+        # Not `// (1024 * 1024)`: integer division reported "the 0 MB aggregate
+        # budget was reached" for any budget under a megabyte, which reads as a
+        # bug in the scanner rather than as a setting the user chose.
+        mb = max_total_bytes / (1024 * 1024)
+        budget = f"{mb:.0f} MB" if mb >= 1 else f"{max_total_bytes:,} byte"
+        notes.append(
+            f"read: the {budget} aggregate budget was reached — {over_budget} "
+            "file(s) were not scanned; raise --max-total-bytes to cover the "
+            "whole tree"
+        )
+    return files, notes
 
 
 # --------------------------------------------------------------------------- #
@@ -202,7 +244,7 @@ def render_sarif(report: SecurityReport, root: Path) -> str:
                     "tool": {
                         "driver": {
                             "name": "reposec",
-                            "informationUri": "https://github.com/tushaarsood/repo-security-scanner",
+                            "informationUri": "https://github.com/toosh-legacy/github-py-review",
                             "version": _version(),
                             "rules": list(rules.values()),
                         }
@@ -236,17 +278,27 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print(f"reposec: {root} is not a directory", file=sys.stderr)
         return EXIT_USAGE
 
-    from reposec.config import settings
+    from reposec.pipeline import run_security_scan
 
-    if args.no_triage:
-        settings.security_triage = False
-    if args.offline:
-        settings.security_offline = True
-
-    from reposec.graph import run_security_scan
-
-    files = read_repo(root, args.max_file_bytes)
-    report = run_security_scan(files=files, repo=root.name)
+    files, read_notes = read_repo(root, args.max_file_bytes, args.max_total_bytes)
+    # The flags are passed down rather than written onto the settings singleton.
+    # That singleton is `@lru_cache`d for the life of the process, so mutating
+    # it makes one `--offline` run change every later scan — which is invisible
+    # in a one-shot CLI and wrong everywhere else, including in the test suite.
+    # `None` means "whatever the environment configured".
+    report = run_security_scan(
+        files=files,
+        repo=root.name,
+        offline=True if args.offline else None,
+        triage=False if args.no_triage else None,
+    )
+    if read_notes:
+        # First in the list: everything below it was measured over a partial
+        # tree, so this is the note that qualifies all the others. It also makes
+        # --strict exit 3, which is the right answer for a truncated scan.
+        report = report.model_copy(
+            update={"degraded": read_notes + report.degraded}
+        )
 
     if args.history:
         report = _add_history(report, root, files, args.max_commits)
@@ -373,7 +425,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             line(
                 "code (js/ts)",
                 False,
-                "not installed — run `npm install` in src/security/eslint/",
+                "not installed — run `reposec install-eslint`",
             )
         )
 
@@ -385,6 +437,77 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     print(f"\n  reposec {_version()}\n")
     # Missing detectors are a warning, not a failure: the scan still works.
+    return EXIT_OK
+
+
+def cmd_install_eslint(args: argparse.Namespace) -> int:
+    """Install eslint-plugin-security somewhere the user can actually write.
+
+    The alternative, which this replaces, was `npm install` inside the installed
+    package — that is `/usr/lib/python3/dist-packages` on a distro Python and
+    read-only in a container image, and where it does work it leaves hundreds of
+    untracked directories inside a pip-managed package.
+    """
+    import shutil
+    import subprocess
+
+    from reposec.detectors.code import _ESLINT_ASSETS, eslint_user_dir
+
+    npm = shutil.which("npm")
+    if shutil.which("node") is None or npm is None:
+        print(
+            "reposec: Node.js and npm are required — install them first "
+            "(https://nodejs.org)",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    target = Path(args.dir).expanduser() if args.dir else eslint_user_dir()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        for name in ("package.json", "eslint.config.mjs"):
+            shutil.copyfile(_ESLINT_ASSETS / name, target / name)
+    except OSError as exc:
+        print(f"reposec: cannot write to {target}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    print(f"installing eslint-plugin-security into {target}\n")
+    command = [npm, "install", "--omit=dev", "--no-audit", "--no-fund"]
+    if npm.lower().endswith((".cmd", ".bat")):
+        # npm ships as a batch shim on Windows, and CreateProcess cannot run one
+        # directly. Naming cmd.exe explicitly keeps every argument a literal —
+        # `shell=True` would hand this string to a shell for no reason, and this
+        # scanner reports that as a high-severity finding in anyone else's code.
+        command = ["cmd", "/c", *command]
+    proc = subprocess.run(command, cwd=str(target))
+    if proc.returncode != 0:
+        print("reposec: npm install failed", file=sys.stderr)
+        return EXIT_USAGE
+
+    # Checked at `target`, not through `_eslint_binary()`. The scanner searches
+    # a fixed list of roots, and a `--dir` outside that list is not one of them
+    # — so validating through the search reported a *successful* install as a
+    # failure, exited 2, and told the user to set the variable that would have
+    # made the check pass. The install itself was fine and unusable.
+    if not (target / "node_modules" / "eslint" / "bin" / "eslint.js").is_file():
+        print(
+            f"reposec: npm succeeded but no eslint binary is under {target}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    from reposec.detectors.code import _eslint_binary
+
+    if _eslint_binary() is None:
+        # Installed correctly, somewhere the scanner does not look.
+        print(
+            f"\ninstalled to {target}, which is not a directory reposec "
+            "searches. Point it there:\n\n"
+            f"    export REPOSEC_ESLINT_DIR={target}\n\n"
+            "then `reposec doctor` will report the JS/TS detector."
+        )
+        return EXIT_OK
+    print("\nok — `reposec doctor` should now report the JS/TS detector")
     return EXIT_OK
 
 
@@ -430,6 +553,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=400_000,
         help="skip files larger than this (default: 400000)",
     )
+    scan.add_argument(
+        "--max-total-bytes",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_BYTES,
+        help=(
+            "stop reading once the tree exceeds this many bytes, and report how "
+            f"much was skipped (default: {DEFAULT_MAX_TOTAL_BYTES})"
+        ),
+    )
     scan.add_argument("--format", choices=["text", "json", "sarif"], default="text")
     scan.add_argument(
         "--fail-on",
@@ -456,15 +588,46 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--no-color", action="store_true")
     doctor.set_defaults(func=cmd_doctor)
 
+    install = sub.add_parser(
+        "install-eslint",
+        help="install the JS/TS analyzer into a directory you own",
+    )
+    install.add_argument(
+        "--dir",
+        help="where to install (default: $XDG_DATA_HOME/reposec/eslint)",
+    )
+    install.set_defaults(func=cmd_install_eslint)
+
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Findings quote source from the repository under scan, which contains
+    # whatever characters that repository contains. On a stock Windows console
+    # (cp1252) a single CJK identifier in one file otherwise ends the run in a
+    # UnicodeEncodeError — losing the whole scan on most non-US monorepos.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
     except KeyboardInterrupt:
         print("\nreposec: interrupted", file=sys.stderr)
+        return EXIT_USAGE
+    except ValidationError as exc:
+        # A typo in an environment variable — `LLM_BACKEND=Local` — otherwise
+        # surfaces as twelve frames of pydantic traceback, including for
+        # `--version` and `doctor`, so there is no way to diagnose it with the
+        # tool itself.
+        print(f"reposec: invalid configuration\n{exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001 - the exit code is a contract
+        # Exit 1 means "findings at or above --fail-on" and nothing else. An
+        # unexpected crash must not be indistinguishable from a blocking scan,
+        # because CI treats the two completely differently.
+        print(f"reposec: {type(exc).__name__}: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
 

@@ -433,6 +433,15 @@ def scan_dependencies(
             "query cap were not checked"
         )
 
+    if getattr(hits, "unmatched", 0):
+        # OSV answered with fewer result slots than the batch had queries. The
+        # tail is unchecked, and without this note it would be indistinguishable
+        # from a tail with no known vulnerabilities.
+        degraded.append(
+            f"dependency: OSV returned no result for {hits.unmatched} "
+            "package(s), which were left unchecked"
+        )
+
     all_ids = [vid for ids in hits.values() for vid in ids]
     details = fetch_details(all_ids)
     if getattr(details, "truncated", 0):

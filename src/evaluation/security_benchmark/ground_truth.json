@@ -1,17 +1,26 @@
 {
   "_readme": [
-    "Ground truth for the security benchmark. Two halves, and the second is the",
-    "one that matters: `planted` findings measure recall, `decoys` measure",
+    "Ground truth for the security benchmark. Four sections, and the second is",
+    "the one that matters: `planted` findings measure recall, `decoys` measure",
     "precision. A scanner that fires on everything scores perfect recall, so",
     "recall alone proves nothing.",
     "",
     "A planted entry is matched by (file, category) with the line within",
     "`line_tolerance`. `rule_any` lists acceptable rule ids where more than one",
     "detector legitimately catches the same thing; omit it to accept any rule.",
+    "`expect_severity` is the floor the finding must be reported at — a real",
+    "credential ranked 'low' is nearly as useless as a missed one.",
     "",
     "A decoy is a location that must produce NO finding of that category. Each",
     "one is a real false-positive mode observed in actual secret scanners and",
-    "linters, not an invented edge case."
+    "linters, not an invented edge case. Two of them are known to fire; they are",
+    "marked `known_failure` with the reason, so the score stays honest instead",
+    "of the fixture being softened until it passes.",
+    "",
+    "`downgraded` covers the third case: findings that must appear, but quietly.",
+    "A high-entropy value in a documentation file is usually an illustration, and",
+    "ranking it alongside a live credential is what trains people to ignore",
+    "secret findings."
   ],
   "line_tolerance": 2,
 
@@ -20,8 +29,27 @@
     {"file": "conf/settings.py", "line": 10, "category": "secret", "rule_any": ["aws-secret-access-key", "generic-api-key"], "expect_severity": "high", "why": "AWS secret access key"},
     {"file": "conf/settings.py", "line": 11, "category": "secret", "rule_any": ["github-pat"], "expect_severity": "high", "why": "GitHub PAT"},
     {"file": "conf/settings.py", "line": 12, "category": "secret", "rule_any": ["stripe-secret-key"], "expect_severity": "high", "why": "live Stripe key"},
-    {"file": "conf/settings.py", "line": 13, "category": "secret", "rule_any": ["database-connection-string"], "expect_severity": "high", "why": "DB URL with password"},
+    {"file": "conf/settings.py", "line": 13, "category": "secret", "rule_any": ["database-connection-string"], "expect_severity": "high", "why": "DB URL with password, routable host"},
     {"file": "conf/settings.py", "line": 14, "category": "secret", "rule_any": ["hardcoded-crypto-key", "generic-api-key"], "expect_severity": "high", "why": "JWT signing key"},
+
+    {"file": "conf/providers.py", "line": 9,  "category": "secret", "rule_any": ["github-fine-grained-pat"], "expect_severity": "high", "why": "GitHub fine-grained PAT"},
+    {"file": "conf/providers.py", "line": 10, "category": "secret", "rule_any": ["gitlab-pat"], "expect_severity": "high", "why": "GitLab PAT"},
+    {"file": "conf/providers.py", "line": 11, "category": "secret", "rule_any": ["openai-api-key"], "expect_severity": "high", "why": "OpenAI project key"},
+    {"file": "conf/providers.py", "line": 12, "category": "secret", "rule_any": ["anthropic-api-key"], "expect_severity": "high", "why": "Anthropic API key"},
+    {"file": "conf/providers.py", "line": 13, "category": "secret", "rule_any": ["slack-token"], "expect_severity": "high", "why": "Slack bot token"},
+    {"file": "conf/providers.py", "line": 14, "category": "secret", "rule_any": ["slack-webhook"], "expect_severity": "medium", "why": "Slack incoming webhook — anyone with the URL can post"},
+    {"file": "conf/providers.py", "line": 15, "category": "secret", "rule_any": ["google-api-key"], "expect_severity": "medium", "why": "Google API key"},
+    {"file": "conf/providers.py", "line": 16, "category": "secret", "rule_any": ["npm-token"], "expect_severity": "high", "why": "npm publish token — supply-chain access"},
+    {"file": "conf/providers.py", "line": 17, "category": "secret", "rule_any": ["sendgrid-api-key"], "expect_severity": "medium", "why": "SendGrid key — send mail as the domain"},
+    {"file": "conf/providers.py", "line": 18, "category": "secret", "rule_any": ["twilio-api-key"], "expect_severity": "medium", "why": "Twilio API key"},
+    {"file": "conf/providers.py", "line": 19, "category": "secret", "rule_any": ["mailgun-api-key"], "expect_severity": "medium", "why": "Mailgun key"},
+    {"file": "conf/providers.py", "line": 20, "category": "secret", "rule_any": ["telegram-bot-token"], "expect_severity": "medium", "why": "Telegram bot token"},
+    {"file": "conf/providers.py", "line": 21, "category": "secret", "rule_any": ["pypi-token"], "expect_severity": "high", "why": "PyPI upload token — supply-chain access"},
+    {"file": "conf/providers.py", "line": 22, "category": "secret", "rule_any": ["jwt"], "expect_severity": "medium", "why": "signed JWT with an admin claim"},
+    {"file": "conf/providers.py", "line": 25, "category": "secret", "rule_any": ["gcp-service-account"], "expect_severity": "high", "why": "GCP service-account blob pasted inline"},
+    {"file": "conf/providers.py", "line": 27, "category": "secret", "rule_any": ["private-key"], "expect_severity": "high", "why": "RSA private key block"},
+
+    {"file": "docs/configuration.md", "line": 31, "category": "secret", "rule_any": ["github-pat"], "expect_severity": "high", "why": "a provider fingerprint stays loud even in documentation — docs do not revoke a token"},
 
     {"file": "app/storage.py", "line": 16, "category": "code", "rule_any": ["B608"], "expect_severity": "medium", "why": "SQL built by concatenation"},
     {"file": "app/storage.py", "line": 21, "category": "code", "rule_any": ["B301"], "expect_severity": "medium", "why": "pickle.loads on untrusted input"},
@@ -30,11 +58,26 @@
     {"file": "app/storage.py", "line": 33, "category": "code", "rule_any": ["B324"], "expect_severity": "medium", "why": "md5 for integrity"},
     {"file": "app/storage.py", "line": 37, "category": "code", "rule_any": ["B602", "B605"], "expect_severity": "high", "why": "shell=True with concatenation"},
 
+    {"file": "app/handlers.py", "line": 21, "category": "code", "rule_any": ["B102"], "expect_severity": "medium", "why": "exec on caller-supplied text"},
+    {"file": "app/handlers.py", "line": 26, "category": "code", "rule_any": ["B605", "B602"], "expect_severity": "high", "why": "os.system with concatenation"},
+    {"file": "app/handlers.py", "line": 31, "category": "code", "rule_any": ["B501"], "expect_severity": "high", "why": "TLS verification disabled"},
+    {"file": "app/handlers.py", "line": 36, "category": "code", "rule_any": ["B108"], "expect_severity": "medium", "why": "predictable path in a world-writable directory"},
+    {"file": "app/handlers.py", "line": 41, "category": "code", "rule_any": ["B304", "B305"], "expect_severity": "high", "why": "DES in ECB mode"},
+    {"file": "app/handlers.py", "line": 46, "category": "code", "rule_any": ["B314", "B313"], "expect_severity": "medium", "why": "XML parser that expands external entities"},
+    {"file": "app/handlers.py", "line": 51, "category": "code", "rule_any": ["B310"], "expect_severity": "medium", "why": "urlopen on a caller-controlled URL (SSRF)"},
+    {"file": "app/handlers.py", "line": 56, "category": "code", "rule_any": ["B602", "B609"], "expect_severity": "high", "why": "shell wildcard expansion with rm -rf"},
+
     {"file": "web/render.js", "line": 9,  "category": "code", "rule_any": ["js-innerhtml"], "expect_severity": "medium", "why": "innerHTML XSS sink"},
     {"file": "web/render.js", "line": 10, "category": "code", "rule_any": ["security/detect-eval-with-expression", "js-eval"], "expect_severity": "high", "why": "eval in JS"},
     {"file": "web/render.js", "line": 14, "category": "code", "rule_any": ["security/detect-child-process", "js-child-process-exec"], "expect_severity": "high", "why": "shell command by concatenation"},
     {"file": "web/render.js", "line": 18, "category": "code", "rule_any": ["js-insecure-cipher"], "expect_severity": "high", "why": "createCipher, broken KDF + fixed IV"},
-    {"file": "web/render.js", "line": 22, "category": "code", "rule_any": ["js-node-serialize"], "expect_severity": "high", "why": "unserialize executes payload functions"}
+    {"file": "web/render.js", "line": 22, "category": "code", "rule_any": ["js-node-serialize"], "expect_severity": "high", "why": "unserialize executes payload functions"},
+
+    {"file": "web/api.js", "line": 10, "category": "code", "rule_any": ["js-child-process-exec", "security/detect-child-process"], "expect_severity": "high", "why": "execSync with a template literal, reached through an ESM import — eslint-plugin-security alone does not see this"},
+    {"file": "web/api.js", "line": 15, "category": "code", "rule_any": ["security/detect-non-literal-require"], "expect_severity": "high", "why": "require() of a caller-supplied module name"},
+    {"file": "web/api.js", "line": 20, "category": "code", "rule_any": ["security/detect-non-literal-fs-filename"], "expect_severity": "medium", "why": "unvalidated path traversal"},
+    {"file": "web/api.js", "line": 25, "category": "code", "rule_any": ["js-document-write"], "expect_severity": "medium", "why": "document.write XSS sink"},
+    {"file": "web/api.js", "line": 30, "category": "code", "rule_any": ["security/detect-unsafe-regex"], "expect_severity": "high", "why": "nested quantifiers — exponential backtracking"}
   ],
 
   "decoys": [
@@ -46,6 +89,24 @@
     {"file": "conf/settings.py", "line": 28, "category": "secret", "why": "read from the environment, as it should be"},
     {"file": "conf/settings.py", "line": 30, "category": "secret", "why": "DB URL with a username but no password"},
 
+    {"file": "conf/lookalikes.py", "line": 11, "category": "secret", "why": "AES/CBC/PKCS5Padding — an algorithm spec assigned to a key-shaped name"},
+    {"file": "conf/lookalikes.py", "line": 13, "category": "secret", "why": "a dotted import path, high-entropy only because it is mixed-case text"},
+    {"file": "conf/lookalikes.py", "line": 15, "category": "secret", "why": "a subresource-integrity hash, published in HTML on purpose"},
+    {"file": "conf/lookalikes.py", "line": 17, "category": "secret", "why": "a content-type string"},
+    {"file": "conf/lookalikes.py", "line": 19, "category": "secret", "why": "a cookie name, not its value"},
+    {"file": "conf/lookalikes.py", "line": 21, "category": "secret", "why": "a MIME multipart boundary — random by design and entirely public"},
+    {"file": "conf/lookalikes.py", "line": 24, "category": "secret", "why": "API_KEY = None"},
+    {"file": "conf/lookalikes.py", "line": 25, "category": "secret", "why": "a length constant named PASSWORD_MIN_LENGTH"},
+    {"file": "conf/lookalikes.py", "line": 26, "category": "secret", "why": "the string 'Bearer' is a scheme name"},
+    {"file": "conf/lookalikes.py", "line": 28, "category": "secret", "why": "read from the environment at runtime"},
+    {"file": "conf/lookalikes.py", "line": 32, "category": "secret", "why": "connection string whose password is the word 'password' — a driver usage example"},
+    {"file": "conf/lookalikes.py", "line": 34, "category": "secret", "why": "root:root@localhost — a development database, not reachable data"},
+    {"file": "conf/lookalikes.py", "line": 36, "category": "secret", "why": "connection string with ${PG*} templates instead of credentials"},
+    {"file": "conf/lookalikes.py", "line": 38, "category": "secret", "why": "connection string with no password component"},
+    {"file": "conf/lookalikes.py", "line": 42, "category": "secret", "why": "a git commit SHA"},
+    {"file": "conf/lookalikes.py", "line": 44, "category": "secret", "why": "a lockfile integrity digest"},
+    {"file": "conf/lookalikes.py", "line": 46, "category": "secret", "why": "a PUBLIC key block — the whole point of it is to be published"},
+
     {"file": "app/storage.py", "line": 43, "category": "code", "why": "parameter-bound SQL"},
     {"file": "app/storage.py", "line": 48, "category": "code", "why": "json.loads instead of pickle"},
     {"file": "app/storage.py", "line": 52, "category": "code", "why": "yaml.safe_load"},
@@ -53,16 +114,42 @@
     {"file": "app/storage.py", "line": 62, "category": "code", "why": "argument list, no shell"},
     {"file": "app/storage.py", "line": 67, "category": "code", "why": "the word eval inside a string literal"},
 
+    {"file": "app/handlers.py", "line": 63, "category": "code", "why": "ast.literal_eval instead of exec"},
+    {"file": "app/handlers.py", "line": 68, "category": "code", "why": "subprocess.run with an argument list and shell=False"},
+    {"file": "app/handlers.py", "line": 75, "category": "code", "why": "verify=True — the default, stated explicitly"},
+    {"file": "app/handlers.py", "line": 79, "category": "code", "why": "tempfile.mkdtemp instead of a hardcoded /tmp path"},
+    {"file": "app/handlers.py", "line": 84, "category": "code", "why": "md5 with usedforsecurity=False — a checksum, and it says so"},
+    {"file": "app/handlers.py", "line": 88, "category": "code", "why": "sha256"},
+    {"file": "app/handlers.py", "line": 94, "category": "code", "why": "defusedxml"},
+    {"file": "app/handlers.py", "line": 98, "category": "code", "why": "find with an argument list, no shell, no wildcard expansion"},
+    {"file": "app/handlers.py", "line": 103, "category": "code", "why": "the word eval inside a string literal"},
+
     {"file": "web/render.js", "line": 28, "category": "code", "why": "textContent, not innerHTML"},
     {"file": "web/render.js", "line": 33, "category": "code", "why": "execFile with an argument array"},
     {"file": "web/render.js", "line": 38, "category": "code", "why": "createCipheriv with a random IV"},
     {"file": "web/render.js", "line": 42, "category": "code", "why": "JSON.parse"},
-    {"file": "web/render.js", "line": 47, "category": "code", "why": "the word eval inside a string literal"}
+    {"file": "web/render.js", "line": 47, "category": "code", "why": "the word eval inside a string literal"},
+
+    {"file": "web/api.js", "line": 35, "category": "code", "why": "execFileSync with an argument array"},
+    {"file": "web/api.js", "line": 46, "category": "code", "why": "an allowlist of thunks, each holding a literal require"},
+    {"file": "web/api.js", "line": 51, "category": "code", "known_failure": "eslint-plugin-security's detect-non-literal-fs-filename cannot see the regex guard on the line above, so any computed path is reported. Upstream behaviour; recorded rather than hidden.", "why": "a filename validated against ^[a-z0-9_-]+\\.json$ before use"},
+    {"file": "web/api.js", "line": 58, "category": "code", "why": "createElement + textContent"},
+    {"file": "web/api.js", "line": 62, "category": "code", "known_failure": "detect-unsafe-regex is conservative about any nested group, including a bounded {0,3} that cannot backtrack exponentially. Upstream behaviour; recorded rather than hidden.", "why": "a bounded version regex with a length guard"},
+    {"file": "web/api.js", "line": 66, "category": "code", "why": "crypto.randomBytes for a token"},
+    {"file": "web/api.js", "line": 71, "category": "code", "why": "the word eval inside a string literal"}
+  ],
+
+  "downgraded": [
+    {"file": "docs/configuration.md", "line": 10, "category": "secret", "max_severity": "low", "why": "an entropy-gated match in prose showing what a session secret looks like"},
+    {"file": "docs/configuration.md", "line": 14, "category": "secret", "max_severity": "medium", "why": "a signing key in a documentation code block"},
+    {"file": "docs/configuration.md", "line": 23, "category": "secret", "max_severity": "medium", "why": "an encryption key in a documentation code block"}
   ],
 
   "decoy_files": [
     {"file": ".env.example", "why": "example files document credential shape; flagging them is the classic noise source"},
-    {"file": "node_modules/leftpad/index.js", "why": "vendored third-party code the user cannot fix"}
+    {"file": "deploy/secrets.yaml.example", "why": "a manifest whose entire purpose is to list every credential the app needs, by shape"},
+    {"file": "node_modules/leftpad/index.js", "why": "vendored third-party code the user cannot fix"},
+    {"file": "web/vendor/analytics.min.js", "why": "a minified vendor bundle: unfixable, and a reliable source of entropy false positives"}
   ],
 
   "dependencies": {

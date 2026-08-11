@@ -49,13 +49,19 @@ COPY --from=eslint /eslint/node_modules ./src/reposec/detectors/eslint/node_modu
 # entry point users get from pip — one code path, not two.
 RUN pip install --no-cache-dir --no-deps -e .
 
+# The bind-mounted repo is owned by the host uid, not by `scanner`, so git's
+# dubious-ownership check would refuse to read it and --history would silently
+# find nothing. The container only ever reads the mount.
+RUN git config --system --add safe.directory '*'
+
 # Fail the build rather than ship an image whose detectors silently degrade.
-RUN reposec doctor --no-color \
-    && python -c "import sys; \
-from reposec.detectors.code import _eslint_binary; \
-assert _eslint_binary() is not None, 'eslint missing from image'; \
-import bandit, shutil; \
-assert shutil.which('node'), 'node missing from image'"
+#
+# `reposec doctor` cannot be that gate: it reports what is available and always
+# exits 0, by design, so a missing analyzer would print a line nobody reads and
+# the build would go green. verify_image.py scans a fixture and names whichever
+# analyzer failed to run. See its docstring for why the check is offline.
+COPY deploy/verify_image.py /tmp/verify_image.py
+RUN python /tmp/verify_image.py && rm /tmp/verify_image.py
 
 # A scan writes nothing outside /tmp, so the container does not need root.
 RUN useradd --create-home --uid 10001 scanner

@@ -82,7 +82,124 @@ const ANNOTATION_RE = /\b(e\.g\.|for example|replace with|see docs)\b/i;
 // suppresses, and only for the entropy-gated rules: a `ghp_…` in documentation
 // is still a live credential. Mirrors `detectors/secrets.py`.
 const DOC_FILE_RE = /(^|\/)(docs?|documentation|examples?|samples?)\/|\.(md|rst|adoc|txt)$/i;
+
+// Test trees, where credential-shaped strings legitimately live second only to
+// documentation. Same treatment: downgrade the entropy-gated rules, leave
+// provider fingerprints alone. The exception is a cryptographic key *file*
+// under a test tree — a self-signed fixture cert, which the private-key rule
+// reports `high` with no entropy gate to catch it. Mirrors `detectors/secrets.py`.
+const TEST_PATH_RE = /(^|\/)(tests?|testing|spec|specs|__tests__|fixtures?|testdata)\//i;
+const TEST_KEY_FILE_RE = /\.(key|pem|crt|cer|der|p12|pfx|jks|keystore)$/i;
+
 const DOWNGRADE = { high: "medium", medium: "low", low: "low" };
+
+// ---------------------------------------------------------------------------
+// Connection strings.
+//
+// `postgres://user:pass@host/db` is the single most-documented URL shape there
+// is: every database driver's docstring contains one, and none of them contain
+// a credential. Measured on 420 kLOC of installed packages, this rule produced
+// 15 findings and all 15 were SQLAlchemy docstrings — `scott:tiger@localhost`,
+// `user:password@host`. That is not a tunable threshold, it is a category
+// error, so the password and the host are judged separately from the URL.
+// Mirrors `_connection_string_verdict` in `detectors/secrets.py`.
+// ---------------------------------------------------------------------------
+// The host is `*`, not `+`, on purpose. `postgresql+psycopg2://user:password@/db
+// ?host=HostA` is a documented libpq form — the host moves into a query
+// parameter and the authority's host component is empty. With `+` the pattern
+// did not match at all, so the verdict was `keep` and the password was never
+// examined: six of psycopg2's and asyncpg's own docstrings were reported as
+// leaked credentials. An empty host is not itself a reason to drop, so it just
+// falls through to the password check, which is what catches these.
+const DB_URL_RE = /:\/\/(?<user>[^\s:@/"']+):(?<password>[^\s:@/"']+)@(?<host>[^\s/:"'<>]*)/;
+
+// Passwords that exist to occupy the password slot in an example. `scott/tiger`
+// is Oracle's demo account and is repeated verbatim across database docs.
+const ILLUSTRATIVE_PASSWORDS = new Set([
+  "password", "passwd", "pass", "pwd", "mypassword", "my_password",
+  "secret", "mysecret", "changeme", "change_me", "tiger", "hunter2",
+  "root", "admin", "guest", "user", "username", "test", "testing",
+  "dbpass", "dbpassword", "db_password", "letmein", "abc123", "qwerty",
+  "postgres", "mysql", "redis", "mongo", "example", "sample", "foobar",
+]);
+
+// Hosts that cannot be a production database: loopback, the reserved example
+// domains (RFC 2606), and the generic words drivers use in their docs.
+const ILLUSTRATIVE_HOSTS = new Set([
+  "localhost", "127.0.0.1", "0.0.0.0", "::1", "host", "hostname",
+  "your-host", "your_host", "yourhost", "dbhost", "db_host", "db",
+  "database", "server", "myhost", "somehost", "example.com",
+  "example.org", "example.net",
+]);
+
+// RFC 1918 and link-local. A URL pointing into a private range is a developer's
+// own network; it is still worth reporting, but it is not the internet-reachable
+// data access the rule's high severity is describing.
+const PRIVATE_HOST_RE = /^(?:10\.|127\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.)/;
+
+const ILLUSTRATIVE_HOST_SUFFIXES = [".example", ".invalid", ".local"];
+
+// `drop`, `downgrade`, or `keep` for one database URL. Split out from
+// `isPlaceholder` because the whole-string placeholder check cannot work here:
+// the URL contains a hostname, a database name and query parameters, so the
+// interesting substring is diluted by everything around it.
+export function connectionStringVerdict(secret) {
+  const match = DB_URL_RE.exec(secret);
+  if (match === null) return "keep";
+
+  const { user, password, host: rawHost } = match.groups;
+  const pw = password.toLowerCase();
+  const host = rawHost.toLowerCase().split(":")[0];
+
+  if (ILLUSTRATIVE_PASSWORDS.has(pw) || pw === user.toLowerCase()) return "drop";
+  // `<pw>`, `${DB_PASS}`, `%(password)s` — a template, not a value.
+  if (PLACEHOLDER_SHAPE_RE.test(password)) return "drop";
+  if (ILLUSTRATIVE_HOSTS.has(host) || ILLUSTRATIVE_HOST_SUFFIXES.some((s) => host.endsWith(s))) {
+    return "drop";
+  }
+  if (PRIVATE_HOST_RE.test(host)) return "downgrade";
+  return "keep";
+}
+
+// Values built from `.`- or `/`-separated words: `AES/CBC/PKCS5Padding`,
+// `django.core.signing.TimestampSigner`, `connect.sid.signed.v2`. Measured over
+// the whole string these clear any entropy floor, because the separators and the
+// case changes supply the variety — but each segment on its own is a word.
+const SEGMENT_RE = /[./]/;
+
+// A segment is "wordlike" when it is essentially letters. `PKCS5Padding` is;
+// `2O76UMFxFkM` is not. Segments under four characters are exempt because their
+// entropy is bounded by their length and says nothing either way.
+const WORDLIKE_MIN_LEN = 4;
+const WORDLIKE_ALPHA_RATIO = 0.85;
+
+function isWordlike(segment) {
+  if (segment.length < WORDLIKE_MIN_LEN) return true;
+  const alpha = (segment.match(/[A-Za-z]/g) || []).length;
+  return alpha / segment.length >= WORDLIKE_ALPHA_RATIO;
+}
+
+// Entropy of `secret`, discounting structure that only looks random. Whole-
+// string entropy is the wrong measure for a structured name: joining ordinary
+// words with dots or slashes produces a number indistinguishable from base64.
+//
+// But scoring segments unconditionally is worse, and in the dangerous
+// direction: `/` and `+` are in the base64 alphabet, so a real AWS secret key
+// contains a slash about 40% of the time, and splitting on it leaves segments
+// too short to clear the gate. So the segment measure applies only when every
+// segment is wordlike. Mirrors `_secret_entropy` in `detectors/secrets.py`.
+export function secretEntropy(secret) {
+  const segments = secret.split(SEGMENT_RE).filter(Boolean);
+  const structured =
+    segments.length >= 2 &&
+    // At least one segment long enough for its entropy to mean something:
+    // `Kj8.mQ2.pL9.xR4` is all three-character pieces, each scoring near zero
+    // for being short rather than for being a word.
+    segments.some((s) => s.length >= WORDLIKE_MIN_LEN) &&
+    segments.every(isWordlike);
+  if (!structured) return shannonEntropy(secret);
+  return Math.max(...segments.map(shannonEntropy));
+}
 
 export function isPlaceholder(secret, line) {
   const low = secret.toLowerCase();
@@ -100,11 +217,17 @@ export function isPlaceholder(secret, line) {
 export function scanFileForSecrets(path, content) {
   if (!isScannable(path) || !content.trim() || content.includes("\0")) return [];
 
-  const isExample = EXAMPLE_FILE_RE.test(path);
+  const isTest = TEST_PATH_RE.test(path);
+  const isExample =
+    EXAMPLE_FILE_RE.test(path) || (isTest && TEST_KEY_FILE_RE.test(path));
   const isDocs = DOC_FILE_RE.test(path);
   const lines = content.split("\n");
   const findings = [];
   const seen = new Set();
+  // The raw secret behind each finding, so identical values matched by more
+  // than one rule can be collapsed below. Kept alongside rather than derived
+  // from the redacted evidence, which is not injective for short values.
+  const raw = [];
 
   for (const rule of SECRET_RULES) {
     const re = new RegExp(rule.pattern, rule.flags);
@@ -121,12 +244,34 @@ export function scanFileForSecrets(path, content) {
       const secret = rule.group ? (match[1] ?? match[0]) : match[0];
 
       if (isExample || isPlaceholder(secret, line)) continue;
-      if (rule.minEntropy && shannonEntropy(secret) < rule.minEntropy) continue;
+      if (rule.minEntropy && secretEntropy(secret) < rule.minEntropy) continue;
+
+      const verdict =
+        rule.id === "database-connection-string" ? connectionStringVerdict(secret) : "keep";
+      if (verdict === "drop") continue;
 
       seen.add(key);
+      raw.push(secret);
 
       let severity = rule.severity;
       let explanation = rule.explanation;
+      if (verdict === "downgrade") {
+        severity = DOWNGRADE[severity];
+        explanation +=
+          "\n\nRanked lower because the host is on a private network, so this " +
+          "is most likely a development database rather than internet-reachable " +
+          "data. Rotate it anyway if the password is reused.";
+      }
+      // Only the entropy-gated rules are downgraded in documentation and test
+      // trees. A provider-fingerprinted token is a live credential wherever it
+      // sits.
+      if (isTest && rule.minEntropy) {
+        severity = DOWNGRADE[severity];
+        explanation +=
+          "\n\nRanked lower because this is a test file, where a credential-" +
+          "shaped string is usually a fixture. Confirm it is not a real " +
+          "credential before dismissing it.";
+      }
       if (isDocs && rule.minEntropy) {
         severity = DOWNGRADE[severity];
         explanation +=
@@ -153,7 +298,42 @@ export function scanFileForSecrets(path, content) {
       });
     }
   }
-  return findings;
+  return oneFindingPerCredential(findings, raw);
+}
+
+const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
+
+// Collapse rules that all matched the same value on the same line. One leaked
+// credential is one problem: `JWT_SECRET = "…"` matches both
+// `hardcoded-crypto-key` and `generic-api-key`, and `token = "ghp_…"` matches
+// both `github-pat` and the generic rule. Reporting each turns one rotation
+// into a list of three, at three severities, and inflates every count.
+//
+// The survivor is the highest-severity match, and among equals the earliest
+// rule in the table — which puts the provider fingerprints first, because a
+// rule that knows which provider to rotate at beats one that only knows the
+// value looked random. Mirrors `_one_finding_per_credential` in
+// `detectors/secrets.py`.
+function oneFindingPerCredential(findings, raw) {
+  const order = new Map(SECRET_RULES.map((rule, i) => [rule.id, i]));
+  const rank = (f) => [
+    SEVERITY_RANK[f.severity],
+    order.has(f.rule_id) ? order.get(f.rule_id) : order.size,
+  ];
+  const best = new Map();
+  findings.forEach((finding, i) => {
+    const slot = `${finding.line_start} ${raw[i]}`;
+    const incumbent = best.get(slot);
+    if (incumbent === undefined) {
+      best.set(slot, i);
+      return;
+    }
+    const [as, ao] = rank(finding);
+    const [bs, bo] = rank(findings[incumbent]);
+    if (as < bs || (as === bs && ao < bo)) best.set(slot, i);
+  });
+  const keep = new Set(best.values());
+  return findings.filter((_, i) => keep.has(i));
 }
 
 // ---------------------------------------------------------------------------
