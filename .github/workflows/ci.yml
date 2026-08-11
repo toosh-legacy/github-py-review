@@ -64,6 +64,14 @@ jobs:
     # so a failure here is a real leak, not a fixture.
     runs-on: ubuntu-latest
     needs: test
+    # Required by upload-sarif. Without it the upload fails with "Resource not
+    # accessible by integration", and because that step is `continue-on-error`,
+    # the job goes green while the Security tab stays permanently empty — a
+    # feature that reports itself as working and does nothing. Scoped to this
+    # job rather than the workflow, so the other jobs keep the read-only default.
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
         with:
