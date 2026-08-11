@@ -137,7 +137,32 @@ in the order they should be tried:
 3. Enable it only when the indexed key is not a literal, which is what makes the
    rule meaningful — that means a real AST check, not a config change.
 
-### 2.6 `scan_code` writes a full second copy of the tree to `/tmp` — open
+### 2.6 The vendored-directory heuristic is name-only, and silently skips first-party code — open
+
+`VENDOR_DIRS` matches on a path *component name*: any file with `build`, `dist`,
+`out`, `target`, `env` or `coverage` anywhere in its path is dropped before any
+detector sees it. For generated output that is correct and is most of the reason
+a scan is fast.
+
+But it cannot tell a generated `build/` from a source directory that happens to
+be called `build/`, and the second is not hypothetical — `build`, `coverage`,
+`dist` and `env` are all real PyPI distributions. **A user whose source lives in
+`src/target/` or `app/out/` gets it skipped with no note.** That is a silent
+partial scan, which is the failure this tool exists to report in other people's
+code.
+
+Found by CI: the false-positive corpus selects installed packages and re-roots
+them, so on a runner with `build` and `coverage` installed, 22 of 400 corpus
+files never reached a detector. The harness now excludes package names that
+collide with `VENDOR_DIRS`, which fixes the measurement — the product behaviour
+is unchanged and still wrong at the edges.
+
+**Do:** distinguish generated from source rather than guessing from the name —
+`build/` next to a `pyproject.toml` is output, `build/` containing `__init__.py`
+is a package. At minimum, count what the walk skipped for this reason and report
+it, so a skipped tree is visible instead of silent.
+
+### 2.7 `scan_code` writes a full second copy of the tree to `/tmp` — open
 
 Counted and reported when writes fail, which is the important half. Still worth
 revisiting whether bandit can be pointed at the original files for the CLI path,

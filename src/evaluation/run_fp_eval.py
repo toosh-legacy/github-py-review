@@ -50,6 +50,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
+from reposec.detectors.common import VENDOR_DIRS  # noqa: E402
+
 RESULTS = HERE / "fp_corpus_results.json"
 
 # Packaging metadata and the scanner's own test corpora. The first is not code;
@@ -62,6 +64,18 @@ _EXCLUDE_DIRS = {
     "tests",
     "test",
 }
+
+# Packages whose *name* collides with a vendor directory — `build`, `coverage`,
+# `dist`, `env`, `out`, `target` are all real PyPI distributions and all appear
+# in VENDOR_DIRS. Re-rooting one produces `thirdparty/build/__init__.py`, which
+# the scanner correctly refuses to read, so every file in it is selected into the
+# corpus and then silently discarded.
+#
+# That made the measured corpus depend on which packages happened to be
+# installed: on a runner with `build` and `coverage` present, 22 of 400 files
+# never reached a detector and the guard test failed. Imported from the detector
+# rather than restated, so the two cannot drift.
+_VENDOR_NAME_COLLISIONS = VENDOR_DIRS
 
 _SOURCE_SUFFIXES = (".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
 
@@ -79,6 +93,8 @@ def _package_roots(purelib: Path) -> list[Path]:
         if not entry.is_dir():
             continue
         if entry.name in _EXCLUDE_DIRS or entry.name.startswith((".", "_")):
+            continue
+        if entry.name.lower() in _VENDOR_NAME_COLLISIONS:
             continue
         if entry.name.endswith((".dist-info", ".egg-info", ".egg-link")):
             continue
