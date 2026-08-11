@@ -4,7 +4,7 @@
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0,
-      "caught": 6,
+      "caught": 23,
       "missed": 0,
       "false_positives": 0
     },
@@ -17,27 +17,31 @@
       "false_positives": 0
     },
     "code": {
-      "precision": 1.0,
+      "precision": 0.9231,
       "recall": 1.0,
-      "f1": 1.0,
-      "caught": 11,
+      "f1": 0.96,
+      "caught": 24,
       "missed": 0,
-      "false_positives": 0
+      "false_positives": 2
     },
     "overall": {
-      "precision": 1.0,
+      "precision": 0.9623,
       "recall": 1.0,
-      "f1": 1.0,
-      "caught": 21,
+      "f1": 0.9808,
+      "caught": 51,
       "missed": 0,
-      "false_positives": 0
+      "false_positives": 2
     }
   },
   "degraded": [
     "dependency: 1 unpinned requirement(s) skipped (urllib3\u2026) \u2014 commit a lockfile to include them"
   ],
+  "labelled_cases": 111,
   "missed": [],
-  "false_positives": [],
+  "false_positives": [
+    "web/api.js:51 fired security/detect-non-literal-fs-filename \u2014 a filename validated against ^[a-z0-9_-]+\\.json$ before use [known: eslint-plugin-security's detect-non-literal-fs-filename cannot see the regex guard on the line above, so any computed path is reported. Upstream behaviour; recorded rather than hidden.]",
+    "web/api.js:62 fired security/detect-unsafe-regex \u2014 a bounded version regex with a length guard [known: detect-unsafe-regex is conservative about any nested group, including a bounded {0,3} that cannot backtrack exponentially. Upstream behaviour; recorded rather than hidden.]"
+  ],
   "notes": [],
-  "latency_ms": 1584
+  "latency_ms": 1699
 }

@@ -42,7 +42,7 @@ _ESLINT_ASSETS = Path(__file__).resolve().parent / "eslint"
 # is pinned explicitly.
 _DECODE = {"encoding": "utf-8", "errors": "replace"}
 
-# Three bandit checks fire on ubiquitous, *correct* code and drown the findings
+# Bandit checks that fire on ubiquitous, *correct* code and drown the findings
 # that matter. Each is a prompt to go review something, not a finding:
 #   B101 assert_used                      every test file in every Python repo
 #   B603 subprocess_without_shell_equals_true
@@ -50,10 +50,30 @@ _DECODE = {"encoding": "utf-8", "errors": "replace"}
 #                                         recommended safe form
 #   B607 start_process_with_partial_path  fires on `run(["git", ...])`; absolute
 #                                         paths only matter in setuid contexts
-# The real subprocess risk is shell=True with interpolation, and B602/B605/B609
-# still catch that. Everything else bandit reports is security-relevant by
-# construction, so the skip list stays this short deliberately.
-_BANDIT_SKIP = {"B101", "B603", "B607"}
+#   B110 try_except_pass  \  swallowing an exception is a code smell, not a
+#   B112 try_except_continue >  security finding, and it is everywhere.
+#   B105 hardcoded_password_string  \  the secret detector owns this, and gates
+#   B106 hardcoded_password_funcarg  >  it on entropy. Bandit gates it on
+#   B107 hardcoded_password_default /   nothing, so it reports every
+#                                       `token = "x-request-id"` in the tree —
+#                                       and duplicates every real hit the
+#                                       secret detector already found.
+#
+# These are measured, not guessed: on 420 kLOC of installed third-party packages
+# the skipped rules were over half of every finding the scanner produced, none
+# of them actionable. `src/evaluation/run_fp_eval.py` regenerates that number.
+#
+# Everything else bandit reports is security-relevant by construction, so the
+# skip list stays this short deliberately.
+_BANDIT_SKIP = {"B101", "B603", "B607", "B110", "B112", "B105", "B106", "B107"}
+
+# Bandit's `blacklist` import checks, B401-B415: "this module contains a
+# dangerous function". An import is not a vulnerability — calling the function
+# is, and bandit has a separate check for each call that matters (B301 for
+# `pickle.loads`, B310 for `urlopen`, B314 for the XML parsers, B304/B305 for
+# the broken ciphers). Reporting both means every file that imports subprocess
+# gets a finding it cannot act on, above the one it can.
+_BANDIT_IMPORT_ADVISORIES = frozenset(f"B4{n:02d}" for n in range(1, 16))
 
 _BANDIT_SEVERITY = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
 
@@ -74,18 +94,6 @@ _BANDIT_FIXES = {
         "Build the query with bound parameters — `cursor.execute(\"... WHERE "
         "id = %s\", (value,))` — instead of string concatenation or f-strings. "
         "Parameter binding is what makes the value data rather than SQL."
-    ),
-    "B105": (
-        "Move the credential out of source into an environment variable or "
-        "secrets manager, and rotate the existing value."
-    ),
-    "B106": (
-        "Pass the password in from configuration rather than as a literal "
-        "argument, and rotate the existing value."
-    ),
-    "B107": (
-        "Remove the credential default; require it to be supplied explicitly "
-        "so a missing config fails loudly instead of using a known password."
     ),
     "B301": (
         "Do not unpickle data you did not produce — `pickle.loads` executes "
@@ -129,9 +137,17 @@ def _safe_relpath(path: str) -> str | None:
     return norm
 
 
-def _materialize(files: list[tuple[str, str]], root: Path) -> dict[str, str]:
-    """Write files into `root`, returning {written relative path: original path}."""
+def _materialize(files: list[tuple[str, str]], root: Path) -> tuple[dict[str, str], int]:
+    """Write files into `root`.
+
+    Returns ({written relative path: original path}, count of files that could
+    not be written). The count matters: this copies the whole tree into a temp
+    directory, so on a large repository with a small `/tmp` it can run out of
+    space — and a scan that silently reports fewer findings because the disk
+    filled is exactly the quiet half-coverage this tool is written against.
+    """
     written: dict[str, str] = {}
+    failed = 0
     for path, content in files:
         rel = _safe_relpath(path)
         if rel is None:
@@ -144,15 +160,16 @@ def _materialize(files: list[tuple[str, str]], root: Path) -> dict[str, str]:
             # parse the file and shifts every line number eslint reports.
             dest.write_text(content, encoding="utf-8", newline="")
         except OSError:
+            failed += 1
             continue
         written[rel] = path
-    return written
+    return written, failed
 
 
 # --------------------------------------------------------------------------- #
 # bandit (Python)
 # --------------------------------------------------------------------------- #
-def _run_bandit(root: Path) -> tuple[list[dict], str | None]:
+def _run_bandit(root: Path, *, timeout: int = 180) -> tuple[list[dict], str | None]:
     """Run bandit over `root`. Returns (results, error message if it failed)."""
     try:
         proc = subprocess.run(
@@ -164,13 +181,13 @@ def _run_bandit(root: Path) -> tuple[list[dict], str | None]:
                 "--exit-zero",
             ],
             capture_output=True,
-            timeout=180,
+            timeout=timeout,
             **_DECODE,
         )
     except FileNotFoundError:
         return [], "bandit is not installed (pip install bandit)"
     except subprocess.TimeoutExpired:
-        return [], "bandit timed out"
+        return [], f"bandit timed out after {timeout}s"
 
     stdout = proc.stdout or ""
     if not stdout.strip():
@@ -190,7 +207,7 @@ def _bandit_findings(
     findings = []
     for r in results:
         test_id = r.get("test_id", "")
-        if test_id in _BANDIT_SKIP:
+        if test_id in _BANDIT_SKIP or test_id in _BANDIT_IMPORT_ADVISORIES:
             continue
         try:
             rel = Path(r.get("filename", "")).resolve().relative_to(root).as_posix()
@@ -267,38 +284,82 @@ _ESLINT_FIXES = {
 }
 
 
+def eslint_user_dir() -> Path:
+    """Where a user-owned eslint install goes, following the XDG convention."""
+    base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    return Path(base) / "reposec" / "eslint"
+
+
+def _eslint_roots() -> list[Path]:
+    """Places an eslint install may live, most specific first.
+
+    The package directory alone is not enough. It works for the Docker image and
+    for a writable virtualenv, but on a distro-managed Python it is a root-owned
+    `/usr/lib/python3/dist-packages`, and in an immutable image it is read-only
+    — so the documented `npm install` into site-packages either fails outright
+    or drops ~300 untracked directories inside a pip-managed package, which
+    `pip uninstall` will not clean up. A user-owned location has to be
+    searchable too.
+    """
+    roots = []
+    if override := os.environ.get("REPOSEC_ESLINT_DIR"):
+        roots.append(Path(override))
+    roots.append(_ESLINT_ASSETS)
+    roots.append(eslint_user_dir())
+    return roots
+
+
+def _eslint_root() -> Path | None:
+    """The first root that holds a usable eslint, or None."""
+    for root in _eslint_roots():
+        if (root / "node_modules" / "eslint" / "bin" / "eslint.js").is_file():
+            return root
+    return None
+
+
 def _eslint_binary() -> Path | None:
-    binary = _ESLINT_ASSETS / "node_modules" / "eslint" / "bin" / "eslint.js"
-    return binary if binary.is_file() else None
+    root = _eslint_root()
+    if root is None:
+        return None
+    return root / "node_modules" / "eslint" / "bin" / "eslint.js"
 
 
-def _write_scan_config(root: Path) -> Path:
-    """Re-export the checked-in config from inside the scan directory.
+def _write_scan_config(root: Path, assets: Path) -> Path:
+    """Re-export the installed config from inside the scan directory.
 
     ESLint 9 skips any file outside its config's base path, so pointing it at
-    `src/security/eslint/eslint.config.mjs` while linting a temp directory
-    silently produces zero findings. Re-exporting from inside the temp tree
-    makes that tree the base path; the config itself still resolves the plugin
-    against its real location.
+    `src/reposec/detectors/eslint/eslint.config.mjs` while linting a temp
+    directory silently produces zero findings. Re-exporting from inside the temp
+    tree makes that tree the base path; the config itself still resolves the
+    plugin against its real location.
+
+    `assets` is the root the eslint install was actually found in, which is not
+    always the package directory — it resolves the plugin relative to itself, so
+    re-exporting the package's copy while running a user-directory install would
+    look in the wrong `node_modules`.
     """
-    source = (_ESLINT_ASSETS / "eslint.config.mjs").resolve().as_uri()
+    config_source = assets / "eslint.config.mjs"
+    if not config_source.is_file():
+        config_source = _ESLINT_ASSETS / "eslint.config.mjs"
+    source = config_source.resolve().as_uri()
     config = root / "eslint.config.mjs"
     config.write_text(f'export {{ default }} from "{source}";\n', encoding="utf-8")
     return config
 
 
-def _run_eslint(root: Path) -> tuple[list[dict], str | None]:
-    binary = _eslint_binary()
-    if binary is None:
+def _run_eslint(root: Path, *, timeout: int = 240) -> tuple[list[dict], str | None]:
+    assets = _eslint_root()
+    if assets is None:
         return [], (
             "code(js): eslint-plugin-security not installed — run "
-            "`npm install` in src/security/eslint/ to enable it"
+            "`reposec install-eslint` to enable it"
         )
+    binary = assets / "node_modules" / "eslint" / "bin" / "eslint.js"
     node = shutil.which("node")
     if node is None:
         return [], "code(js): node not found on PATH — Node.js is required for eslint"
     try:
-        config = _write_scan_config(root)
+        config = _write_scan_config(root, assets)
         proc = subprocess.run(
             [
                 node, str(binary),
@@ -308,13 +369,15 @@ def _run_eslint(root: Path) -> tuple[list[dict], str | None]:
                 ".",
             ],
             capture_output=True,
-            timeout=240,
+            timeout=timeout,
             # The scan directory is the base path, so the files are in scope.
             cwd=str(root),
             env={**os.environ, "NODE_OPTIONS": ""},
             **_DECODE,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired:
+        return [], f"code(js): eslint timed out after {timeout}s"
+    except OSError as exc:
         return [], f"code(js): eslint could not run ({type(exc).__name__})"
 
     stdout = proc.stdout or ""
@@ -400,7 +463,13 @@ _JS_PATTERN_RULES: list[tuple[bool, str, re.Pattern[str], str, str, str, str]] =
         "Define the function directly instead of building it from a string.",
     ),
     (
-        False,
+        # Always on. eslint-plugin-security's detect-child-process only fires
+        # when it can see `require('child_process')` in scope, so an ESM
+        # `import cp from 'node:child_process'` followed by
+        # `cp.execSync(`git fetch ${branch}`)` goes unreported — which is most
+        # modern JavaScript. The benchmark caught this as a missed planted
+        # finding. Duplicates against eslint are dropped below.
+        True,
         "js-child-process-exec",
         re.compile(r"\bexec(?:Sync)?\s*\(\s*[`\"'][^`\"']*\$\{|\bexec(?:Sync)?\s*\([^)]*\+"),
         "high",
@@ -494,42 +563,138 @@ def _js_pattern_findings(
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
+# Both analyzers are chunked, for the same reason: one subprocess over the whole
+# tree means one timeout loses every finding in that language, repository-wide,
+# and says so in a single degraded line nobody reads. Chunking makes a timeout
+# cost one chunk, and names how many files that chunk held.
+#
+# Large enough that the per-invocation cost of starting the analyzer stays
+# amortised, small enough that losing a chunk is a dent rather than the whole
+# language. Measured: bandit runs ~2,000 ordinary source files well inside the
+# budget below. The eslint chunk is half that, because eslint pays a ~1s process
+# start and then parses with a full JS toolchain rather than the stdlib `ast`.
+_PY_CHUNK = 2000
+_JS_CHUNK = 1000
+
+
+def _chunks(
+    items: list[tuple[str, str]], size: int
+) -> list[list[tuple[str, str]]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+# The one place an always-on pattern rule and an eslint rule describe the same
+# defect. `js-child-process-exec` exists because eslint's detect-child-process
+# only fires when it can see `require('child_process')` in scope, so it misses
+# the ESM form — but when eslint *does* see it, both fire on the same line.
+_PATTERN_TWINS = {"js-child-process-exec"}
+_ESLINT_TWINS = {"security/detect-child-process"}
+
+
+def _unwritable_note(language: str, count: int) -> str:
+    return (
+        f"code({language}): {count} file(s) could not be written to "
+        f"{tempfile.gettempdir()} and were not analysed — check free space"
+    )
+
+
+def _scan_python(py: list[tuple[str, str]]) -> tuple[list[SecurityFinding], list[str]]:
+    findings: list[SecurityFinding] = []
+    degraded: list[str] = []
+    for chunk in _chunks(py, _PY_CHUNK):
+        with tempfile.TemporaryDirectory(prefix="secscan-py-") as tmp:
+            root = Path(tmp).resolve()
+            mapping, unwritable = _materialize(chunk, root)
+            if unwritable:
+                degraded.append(_unwritable_note("python", unwritable))
+            # The budget scales with the chunk so a slow runner does not trip it
+            # on the last few files of a short final chunk.
+            results, error = _run_bandit(root, timeout=60 + len(chunk) // 20)
+            if error:
+                degraded.append(f"code(python): {error} ({len(chunk)} file(s))")
+            else:
+                findings.extend(_bandit_findings(results, root, mapping))
+    return findings, degraded
+
+
+def _scan_js(js: list[tuple[str, str]]) -> tuple[list[SecurityFinding], list[str]]:
+    linted: list[SecurityFinding] = []
+    degraded: list[str] = []
+    # Tracked per chunk, because with chunking "did eslint run" is no longer one
+    # answer for the language: a 6,000-file front end can lose one chunk to a
+    # timeout and analyse the other five properly. The pattern rules widen to
+    # cover eslint's ground only over the files eslint actually failed on —
+    # widening them everywhere would report the same line twice for the chunks
+    # that succeeded.
+    unlinted: list[tuple[str, str]] = []
+    failures: dict[str, int] = {}
+    for chunk in _chunks(js, _JS_CHUNK):
+        with tempfile.TemporaryDirectory(prefix="secscan-js-") as tmp:
+            root = Path(tmp).resolve()
+            mapping, unwritable = _materialize(chunk, root)
+            if unwritable:
+                degraded.append(_unwritable_note("js", unwritable))
+            payload, error = _run_eslint(root, timeout=120 + len(chunk) // 8)
+            if error:
+                # Accumulated by cause rather than appended per chunk: when
+                # eslint is simply not installed, every chunk fails the same way,
+                # and a 6,000-file front end emitted the same sentence six times.
+                # One line per distinct cause, carrying the total it cost.
+                failures[error] = failures.get(error, 0) + len(chunk)
+                unlinted.extend(chunk)
+            else:
+                linted.extend(_eslint_findings(payload, root, mapping))
+
+    for error, count in failures.items():
+        degraded.append(
+            f"{error} ({count} file(s)); fell back to regex checks with "
+            "narrower coverage"
+        )
+
+    # The always-on pattern rules cover XSS sinks, insecure ciphers and insecure
+    # deserialization, which eslint-plugin-security has no rules for.
+    unlinted_paths = {p for p, _ in unlinted}
+    patterns = _js_pattern_findings(
+        [(p, c) for p, c in js if p not in unlinted_paths], eslint_ran=True
+    )
+    patterns += _js_pattern_findings(unlinted, eslint_ran=False)
+
+    # Drop a pattern finding only where eslint reported *the same problem* on
+    # the same line. Deduplicating on position alone is wrong in both
+    # directions, and both were live bugs:
+    #
+    #   `el.innerHTML = data[key]` — eslint reports detect-object-injection,
+    #   the noisiest rule in the plugin; the position-only rule then discarded
+    #   `js-innerhtml`, so the XSS sink was replaced by the noise;
+    #
+    #   `el.innerHTML = eval(u)` — two pattern rules on one line collapsed into
+    #   whichever ran first. That is two problems.
+    #
+    # The overlap is one pair. The other always-on rules exist precisely because
+    # eslint-plugin-security has no rule for what they find.
+    equivalent = {(f.file, f.line_start) for f in linted if f.rule_id in _ESLINT_TWINS}
+    findings = list(linted)
+    findings.extend(
+        f
+        for f in patterns
+        if f.rule_id not in _PATTERN_TWINS
+        or (f.file, f.line_start) not in equivalent
+    )
+    return findings, degraded
+
+
 def scan_code(files: list[tuple[str, str]]) -> tuple[list[SecurityFinding], list[str]]:
     """Run bandit over Python files and eslint-plugin-security over JS/TS files.
 
-    Returns (findings, degraded). `degraded` names any language whose real
-    analyzer could not run.
+    Returns (findings, degraded). `degraded` names any language, or any chunk of
+    one, whose real analyzer could not run.
     """
     py = [(p, c) for p, c in files if p.endswith(PYTHON_SUFFIXES) and not is_vendored(p)]
     js = [(p, c) for p, c in files if p.endswith(JS_SUFFIXES) and not is_vendored(p)]
 
     findings: list[SecurityFinding] = []
     degraded: list[str] = []
-
-    if py:
-        with tempfile.TemporaryDirectory(prefix="secscan-py-") as tmp:
-            root = Path(tmp).resolve()
-            mapping = _materialize(py, root)
-            results, error = _run_bandit(root)
-            if error:
-                degraded.append(f"code(python): {error}")
-            else:
-                findings.extend(_bandit_findings(results, root, mapping))
-
-    if js:
-        with tempfile.TemporaryDirectory(prefix="secscan-js-") as tmp:
-            root = Path(tmp).resolve()
-            mapping = _materialize(js, root)
-            payload, error = _run_eslint(root)
-            if error:
-                degraded.append(
-                    f"{error}; fell back to regex checks with narrower coverage"
-                )
-            else:
-                findings.extend(_eslint_findings(payload, root, mapping))
-            # The always-on pattern rules cover XSS sinks, insecure ciphers and
-            # insecure deserialization, which eslint-plugin-security has no
-            # rules for. When eslint didn't run they widen to cover its ground.
-            findings.extend(_js_pattern_findings(js, eslint_ran=error is None))
-
+    for found, notes in (_scan_python(py), _scan_js(js) if js else ([], [])):
+        findings.extend(found)
+        degraded.extend(notes)
     return findings, degraded

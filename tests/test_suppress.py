@@ -107,3 +107,18 @@ def test_missing_suppression_file_yields_no_rules():
 def test_windows_separators_in_finding_paths_still_match():
     kept, dropped = apply([make(file="docs\\a.md")], parse("docs/**"))
     assert kept == [] and dropped == 1
+
+
+def test_a_dotfile_directory_rule_matches_its_own_tree():
+    # `.github/**` is one of the first rules anyone writes, and the leading dot
+    # used to be stripped off both sides by `lstrip("./")` — which happened to
+    # work, but only because the damage was symmetric.
+    kept, dropped = apply([make(file=".github/workflows/ci.yml")], parse(".github/**"))
+    assert kept == [] and dropped == 1
+
+
+def test_a_dotfile_rule_does_not_match_the_undotted_sibling():
+    # The symmetric damage above also made `.github/**` suppress a real
+    # `github/` directory, because both sides collapsed to `github`.
+    kept, dropped = apply([make(file="github/workflows/ci.yml")], parse(".github/**"))
+    assert len(kept) == 1 and dropped == 0

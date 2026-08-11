@@ -64,7 +64,10 @@ class ChatLLM:
             response_format={"type": "json_object"},
             temperature=self.temperature,
         )
-        tokens = getattr(resp.usage, "total_tokens", 0) or 0
+        # Both getattrs are load-bearing: `usage` is optional in the OpenAI
+        # protocol and several local servers omit it entirely. Losing the token
+        # count is a cosmetic loss; raising here would fail the scan over it.
+        tokens = getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0
         return loads_lenient(resp.choices[0].message.content or "{}"), tokens
 
 

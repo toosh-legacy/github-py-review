@@ -13,7 +13,8 @@ import pytest
 from synthetic import AWS_KEY_ID as OTHER
 from synthetic import GITHUB_PAT as LEAKED
 
-from reposec.detectors.history import is_repo, scan_history
+from reposec.detectors import history as history_mod
+from reposec.detectors.history import Commit, is_repo, scan_history
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git is not installed"
@@ -150,3 +151,87 @@ def test_two_distinct_secrets_are_two_findings(repo):
     commit(repo, "a.py", f'T = "{LEAKED}"\nA = "{OTHER}"\n', "two leaks")
     findings, _ = scan_history(str(repo))
     assert {f.rule_id for f in findings} == {"github-pat", "aws-access-key-id"}
+
+
+def test_a_multi_commit_history_reports_exactly_what_it_used_to(repo):
+    # The scan streams the log instead of collecting it into a list first, so
+    # this pins down the whole observable result — which secrets, on which
+    # commit, in which order — against a history with enough shape to catch a
+    # reordering or a lost deduplication.
+    commit(repo, "a.py", f'T = "{LEAKED}"\n', "leak the pat")
+    commit(repo, "b.py", "x = 1\n", "unrelated")
+    commit(repo, "c.py", f'A = "{OTHER}"\n', "leak the aws key")
+    commit(repo, "a.py", "T = None\n", "clean up the pat")
+    commit(repo, "d.py", f'T = "{LEAKED}"\n', "re-add the pat elsewhere")
+
+    findings, degraded = scan_history(str(repo))
+
+    assert degraded == []
+    # Newest-first walk: the PAT is sighted first (in d.py) so it is reported
+    # first, but it is attributed back to a.py, where it entered the repository.
+    assert [(f.rule_id, f.file) for f in findings] == [
+        ("github-pat", "a.py"),
+        ("aws-access-key-id", "c.py"),
+    ]
+
+
+def test_the_log_is_consumed_one_commit_at_a_time(repo, monkeypatch):
+    # The reason for streaming is peak memory: `git log --patch` over a repo
+    # that vendored its dependencies is gigabytes, and collecting it into a list
+    # holds all of it at once. Interleaved yields and scans are the observable
+    # proof that only one commit's diff is alive at a time.
+    order: list[str] = []
+
+    def fake_blobs(_repo, _max_commits):
+        for i in range(3):
+            order.append(f"yielded f{i}.py")
+            yield Commit(f"{i:040x}", "Test", "2026-01-01"), f"f{i}.py", "x = 1\n"
+
+    real_is_scannable = history_mod.is_scannable
+
+    def spy(path):
+        order.append(f"scanned {path}")
+        return real_is_scannable(path)
+
+    monkeypatch.setattr(history_mod, "iter_added_blobs", fake_blobs)
+    monkeypatch.setattr(history_mod, "is_scannable", spy)
+
+    scan_history(str(repo))
+
+    assert order == [
+        "yielded f0.py",
+        "scanned f0.py",
+        "yielded f1.py",
+        "scanned f1.py",
+        "yielded f2.py",
+        "scanned f2.py",
+    ]
+
+
+def test_a_shallow_clone_says_so_instead_of_reporting_all_clear(repo, tmp_path):
+    # `--max-count` never trips on a `fetch-depth: 1` checkout, so without this
+    # note an unscanned history is indistinguishable from a clean one. Cloning
+    # through a file:// URL because `--depth` is ignored for plain local paths.
+    commit(repo, "a.py", f'T = "{LEAKED}"\n', "leak")
+    commit(repo, "a.py", "T = None\n", "clean up")
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", repo.as_uri(), str(shallow)],
+        check=True, capture_output=True, encoding="utf-8", errors="replace",
+    )
+
+    findings, degraded = scan_history(str(shallow))
+
+    assert any("shallow clone" in d for d in degraded)
+    # The point of the note: the secret really is invisible from here.
+    assert findings == []
+
+
+def test_a_full_clone_is_not_flagged_as_shallow(repo, tmp_path):
+    commit(repo, "a.py", "x = 1\n", "clean")
+    full = tmp_path / "full"
+    subprocess.run(
+        ["git", "clone", "-q", repo.as_uri(), str(full)],
+        check=True, capture_output=True, encoding="utf-8", errors="replace",
+    )
+    assert scan_history(str(full)) == ([], [])

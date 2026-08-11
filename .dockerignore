@@ -12,7 +12,17 @@ dist
 docs
 tests
 deploy
+# …except the build-time gate itself, which runs inside the image and must
+# therefore be sent to the build context. Re-including one path under an ignored
+# directory needs the negation to come after the directory rule, and Docker
+# reports the resulting COPY failure as "not found", which reads as a missing
+# file rather than an ignored one.
+!deploy/verify_image.py
 src/evaluation
+# The browser extension is a separate artifact with its own release path. Inside
+# the scanner image it is unreachable code that busts the layer cache whenever
+# the extension changes.
+src/apps
 # Built from package.json in the Node stage; the host's copy may target another
 # platform and must not be shipped in.
 src/reposec/detectors/eslint/node_modules

@@ -77,6 +77,13 @@ def is_repo(path: str) -> bool:
         return False
 
 
+def _is_shallow(repo: str) -> bool:
+    try:
+        return _run_git(repo, "rev-parse", "--is-shallow-repository").strip() == "true"
+    except GitUnavailable:
+        return False
+
+
 def _stream_git(repo: str, *args: str):
     """Yield git's stdout line by line, without buffering all of it.
 
@@ -199,27 +206,40 @@ def scan_history(
 
     degraded: list[str] = []
 
-    try:
-        blobs = list(iter_added_blobs(repo, max_commits))
-    except GitUnavailable as exc:
-        return [], [f"history: {exc} — history not scanned"]
+    if _is_shallow(repo):
+        # `git log --max-count=1000` on a `fetch-depth: 1` clone returns one
+        # commit and finds nothing, which reads as "your history is clean". It
+        # is not: the rest of it was never fetched, so say so.
+        degraded.append(
+            "history: shallow clone — only the fetched commits were scanned. "
+            "Set fetch-depth: 0 (or `git fetch --unshallow`) to scan history."
+        )
 
     # Keep the pristine finding next to the oldest commit that introduced it, so
     # the annotation is applied exactly once at the end. Annotating in place
     # would stack a title suffix and an explanation paragraph per commit.
     seen: dict[tuple[str, str], tuple[SecurityFinding, Commit, str]] = {}
+    # Only the commit shas are retained, not the diffs. Collecting the blobs
+    # into a list first would hold every added line of a thousand commits in
+    # memory at once — gigabytes on a repository that vendored its dependencies,
+    # which is exactly the kind this scan is for.
+    shas: set[str] = set()
 
-    for commit, path, text in blobs:
-        if not is_scannable(path):
-            continue
-        for f in scan_file(path, text):
-            # `git log` walks newest first, so each later sighting is an older
-            # commit — and the oldest introduction is the one worth reporting,
-            # because it is how long the credential has been exposed.
-            seen[(f.rule_id, f.evidence)] = (f, commit, path)
+    try:
+        for commit, path, text in iter_added_blobs(repo, max_commits):
+            shas.add(commit.sha)
+            if not is_scannable(path):
+                continue
+            for f in scan_file(path, text):
+                # `git log` walks newest first, so each later sighting is an
+                # older commit — and the oldest introduction is the one worth
+                # reporting, because it is how long the credential was exposed.
+                seen[(f.rule_id, f.evidence)] = (f, commit, path)
+    except GitUnavailable as exc:
+        return [], [f"history: {exc} — history not scanned"]
 
     findings = [_with_commit(f, commit, path) for f, commit, path in seen.values()]
-    if len(blobs) and max_commits and len({c.sha for c, _, _ in blobs}) >= max_commits:
+    if max_commits and len(shas) >= max_commits:
         degraded.append(
             f"history: stopped at --max-commits={max_commits}; older commits "
             "were not scanned"

@@ -232,6 +232,7 @@ def triage(
     contexts: dict[str, str] | None = None,
     *,
     repo: str | None = None,
+    enabled: bool | None = None,
 ) -> tuple[list[SecurityFinding], int]:
     """Deduplicate, rank, explain and fix. Returns (findings, tokens_used).
 
@@ -245,7 +246,10 @@ def triage(
     # than paying the model to notice that two rules hit the same line.
     findings = deterministic_triage(findings)
 
-    if not settings.security_triage:
+    # `enabled` is the per-scan answer when the caller has one (`--no-triage`);
+    # the configured default otherwise. Passing it beats writing to the settings
+    # singleton, which is cached for the life of the process.
+    if not (settings.security_triage if enabled is None else enabled):
         return findings, 0
 
     from reposec.llm import ChatLLM, get_llm

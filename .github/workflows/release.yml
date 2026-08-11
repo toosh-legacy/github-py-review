@@ -40,22 +40,87 @@ jobs:
           LLM_BACKEND: mock
       - name: Version matches the tag
         run: |
+          pip install packaging
           python - <<'PY'
           import json, os, pathlib, sys, tomllib
-          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          from packaging.version import InvalidVersion, Version
+
+          # removeprefix, not lstrip: lstrip takes a character set, so it would
+          # accept "vv1.0.0" and every other leading-v spelling as 1.0.0.
+          raw = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          try:
+              tag = Version(raw)
+          except InvalidVersion:
+              sys.exit(f"tag {raw!r} is not a valid version")
+
           pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
           manifest = json.loads(
               pathlib.Path("src/apps/extension/manifest.json").read_text()
           )
           problems = []
-          if pyproject["project"]["version"] != tag:
-              problems.append(f"pyproject {pyproject['project']['version']} != tag {tag}")
-          if manifest["version"] != tag:
-              problems.append(f"manifest {manifest['version']} != tag {tag}")
+
+          # Compared as versions, not as strings. A prerelease tag is spelled
+          # `v1.1.0-rc1` by convention here, and PEP 440 normalises that to
+          # `1.1.0rc1` — which is what pyproject must contain. A string compare
+          # made every prerelease fail this gate, so no prerelease could ever be
+          # cut, which is precisely when you most want one.
+          declared = Version(pyproject["project"]["version"])
+          if declared != tag:
+              problems.append(f"pyproject {declared} != tag {tag}")
+
+          # Chrome's manifest version must be one to four dot-separated
+          # integers — it cannot carry a prerelease suffix at all, and
+          # deploy/package_extension.py rejects one. So the extension tracks the
+          # release core: v1.1.0-rc1 and v1.1.0 both ship extension 1.1.0.
+          if manifest["version"] != tag.base_version:
+              problems.append(
+                  f"manifest {manifest['version']} != {tag.base_version} "
+                  f"(the release core of tag {tag})"
+              )
+
           if problems:
               sys.exit("version mismatch:\n  " + "\n  ".join(problems))
-          print(f"version {tag} is consistent")
+          print(f"version {tag} is consistent (extension {tag.base_version})")
           PY
+
+      # Built here, in the same job that just tested the tree, and carried to
+      # the publish job as an artifact. Building it again there would publish a
+      # wheel nobody has installed: the tests above run against `pip install -e`,
+      # which reads the source tree directly and so cannot notice a file the
+      # wheel fails to include.
+      - name: Build the distributions
+        run: |
+          pip install build
+          python -m build
+      # node_modules is installed above, in the tree the wheel is built from,
+      # so a packaging mistake would vendor a platform-specific dependency tree
+      # into an any-platform wheel. It has happened; this is what keeps it from
+      # happening again.
+      - name: The wheel contains only our code
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          bad = [n for n in zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist()
+                 if 'node_modules' in n]
+          if bad: sys.exit("wheel contains vendored files:\n  " + "\n  ".join(bad))
+          PY
+      # An install into an empty interpreter is the only thing that proves the
+      # console script is wired up and the package data (the eslint config) made
+      # it in. The editable install above shares the developer's site-packages
+      # and the source tree, so it proves neither.
+      - name: The built wheel installs and runs
+        run: |
+          python -m venv /tmp/wheel-check
+          /tmp/wheel-check/bin/pip install --quiet dist/*.whl
+          /tmp/wheel-check/bin/reposec --version
+          /tmp/wheel-check/bin/reposec doctor --no-color
+          /tmp/wheel-check/bin/reposec scan . --fail-on high --no-color
+        env:
+          LLM_BACKEND: mock
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: dist/*
 
   pypi:
     needs: verify
@@ -66,12 +131,13 @@ jobs:
       # the kind of finding this project exists to report.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # Publishes the artifact `verify` built and smoke-tested. Nothing is built
+      # in this job, so what reaches PyPI is byte-for-byte what was installed
+      # into a clean venv and run.
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.13"
-      - run: pip install build
-      - run: python -m build
+          name: python-package
+          path: dist
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   image:
@@ -79,19 +145,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # arm64 is emulated, so the build is slow, but an Apple-silicon laptop or
+      # a Graviton runner pulling an amd64-only image gets either a refusal or
+      # QEMU on every scan.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Which tags this build publishes
+        id: tags
+        run: |
+          tags="ghcr.io/${{ github.repository }}:$GITHUB_REF_NAME"
+          # :latest is what someone gets when they name no version at all, so a
+          # prerelease must not move it. Every prerelease spelling this project
+          # uses carries a hyphen (v1.1.0-rc1); a final release never does.
+          case "$GITHUB_REF_NAME" in
+            *-*) echo "prerelease $GITHUB_REF_NAME does not move :latest" ;;
+            *) tags="$tags"$'\n'"ghcr.io/${{ github.repository }}:latest" ;;
+          esac
+          {
+            echo "tags<<EOF"
+            echo "$tags"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.tags.outputs.tags }}
 
   extension:
     needs: verify

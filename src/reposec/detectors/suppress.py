@@ -45,8 +45,11 @@ class SuppressRule:
 
 
 def _path_matches(glob: str, path: str) -> bool:
-    path = path.replace("\\", "/").lstrip("./")
-    glob = glob.replace("\\", "/").lstrip("./")
+    # `removeprefix`, not `lstrip("./")`: lstrip takes a character set, so it
+    # would turn `.github/workflows/ci.yml` into `github/workflows/ci.yml` and
+    # let a `.github/**` rule match a plain `github/` directory as well.
+    path = path.replace("\\", "/").removeprefix("./")
+    glob = glob.replace("\\", "/").removeprefix("./")
     if fnmatch(path, glob):
         return True
     # `docs/**` should match `docs/a.md` and `docs/a/b.md`; fnmatch's `*` already

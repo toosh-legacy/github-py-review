@@ -9,9 +9,9 @@ configured) only judges what they found:
     detectors.history   the same secret rules, over git history
     triage              dedupe, rank, explain, fix — never detect
 
-`graph.py` wires the detectors into a LangGraph pipeline whose node order is
-load-bearing: redaction sits between detection and triage, so a raw credential
-cannot reach a model prompt.
+`pipeline.py` runs the detectors in an order that is load-bearing: redaction
+sits between detection and triage, so a raw credential cannot reach a model
+prompt.
 
 The public entry point is the `reposec` command; see `cli.py`.
 """

@@ -45,11 +45,49 @@ class _Result(dict):
     The caps exist so one scan cannot fire thousands of requests, but a cap that
     silently shortens the answer is the exact failure this tool reports in other
     people's code. `truncated` is how the caller learns to say so.
+
+    `unmatched` counts packages the API returned no result slot for at all,
+    which is a different failure with the same consequence — see `query_batch`.
     """
 
-    def __init__(self, data: dict, truncated: int = 0) -> None:
+    def __init__(self, data: dict, truncated: int = 0, unmatched: int = 0) -> None:
         super().__init__(data)
         self.truncated = truncated
+        self.unmatched = unmatched
+
+
+def _parse_batch_entry(entry: object) -> list[str]:
+    """The vulnerability ids in one `querybatch` result slot.
+
+    Every branch here raises rather than returning `[]`, and that asymmetry is
+    the whole point. A package with no known vulnerabilities is `{}` or `null` —
+    OSV omits the key. So `[]` from a *malformed* slot is indistinguishable from
+    a genuinely clean package, and the scanner would print "no vulnerable
+    dependencies" for a lockfile full of them. Reporting a schema change as a
+    degraded detector costs the user a warning; reading it as an all-clear costs
+    them the vulnerability.
+    """
+    if entry is None or entry == {}:
+        return []
+    if not isinstance(entry, dict):
+        raise OSVUnavailable(
+            f"unexpected response schema: result slot is {type(entry).__name__}, "
+            "expected an object"
+        )
+    if "vulns" not in entry:
+        # A non-empty slot that says nothing about vulnerabilities means the
+        # field was renamed or moved. Do not read silence as safety.
+        raise OSVUnavailable(
+            "unexpected response schema: result slot has no 'vulns' field "
+            f"(keys: {sorted(entry)[:5]})"
+        )
+    vulns = entry["vulns"]
+    if not isinstance(vulns, list):
+        raise OSVUnavailable(
+            f"unexpected response schema: 'vulns' is {type(vulns).__name__}, "
+            "expected a list"
+        )
+    return [v["id"] for v in vulns if isinstance(v, dict) and v.get("id")]
 
 
 def _chunks(items: list, size: int):
@@ -72,6 +110,7 @@ def query_batch(
     owns_client = client is None
     client = client or httpx.Client(timeout=timeout)
     result: dict[Package, list[str]] = {}
+    unmatched = 0
     try:
         # The API accepts large batches, but keep requests modest so a single
         # slow response can't stall the whole scan.
@@ -87,20 +126,37 @@ def query_batch(
             }
             resp = client.post(f"{OSV_API}/v1/querybatch", json=payload)
             resp.raise_for_status()
-            results = resp.json().get("results", [])
+            body = resp.json()
+            if not isinstance(body, dict) or "results" not in body:
+                raise OSVUnavailable(
+                    "unexpected response schema: no 'results' field in the "
+                    "querybatch reply"
+                )
+            results = body["results"]
+            if not isinstance(results, list):
+                # A dict here used to be worse than useless: `zip` walked its
+                # keys, so `entry` was a str and `entry.get` raised
+                # AttributeError — which escaped this function's except clause
+                # and killed the scan outright instead of degrading it.
+                raise OSVUnavailable(
+                    f"unexpected response schema: 'results' is "
+                    f"{type(results).__name__}, expected a list"
+                )
             # strict=False on purpose: OSV returns results positionally, and a
-            # short list means the API misbehaved. Truncating loses coverage for
-            # the tail of the batch, but raising would lose the whole scan.
+            # short list means the API misbehaved. Losing coverage for the tail
+            # of the batch beats losing the whole scan — but it is counted, not
+            # swallowed, because an unchecked package that reads as a checked
+            # one is the failure this detector exists to prevent.
+            unmatched += max(0, len(batch) - len(results))
             for pkg, entry in zip(batch, results, strict=False):
-                ids = [v["id"] for v in (entry or {}).get("vulns", []) if v.get("id")]
-                if ids:
+                if ids := _parse_batch_entry(entry):
                     result[pkg] = ids
     except (httpx.HTTPError, ValueError, KeyError) as exc:
         raise OSVUnavailable(str(exc)) from exc
     finally:
         if owns_client:
             client.close()
-    return _Result(result, skipped)
+    return _Result(result, skipped, unmatched)
 
 
 def fetch_details(
