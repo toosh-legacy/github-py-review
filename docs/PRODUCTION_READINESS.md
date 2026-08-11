@@ -229,6 +229,24 @@ not scanning a repository.
   real; revisit if users complain before the noise budget does.
 - **B311 (`random`) and B704** are the loudest remaining rules on real code, at
   low severity. Both are context-dependent rather than wrong.
+- **The widened contextual name lists cost ~2.5× on their own rules.** Measured
+  in isolation over 90 KB of source, `generic-api-key` went from 4.1 ms to
+  10.2 ms per pass when the optional qualifier prefix was added; the same for
+  `hardcoded-password` and `hardcoded-crypto-key`. Three alternative
+  formulations were benchmarked and every one was slower — dropping the leading
+  `\b` costs 15.8 ms, a bounded character class 16.8 ms, the lazy variant
+  21.1 ms — because `\b` is what stops the engine attempting a match at every
+  offset. The end-to-end cost is ~2% of a scan, since the secret detector is
+  ~4% of wall time and the analyzers are ~95%. Accepted: it closed a whole class
+  of missed credentials (`JWT_SIGNING_SECRET`, `DB_PASSWORD`) for a cost that
+  does not show up outside a microbenchmark. Do not widen these further without
+  re-running that measurement.
+- **Wall-clock numbers on a developer laptop vary by up to 40% between runs.**
+  Three clean sequential readings of the pure-Python path gave 39, 42 and
+  27 kLOC/s. Publish ranges, not single readings — an earlier version of the
+  README quoted "~56 kLOC/s" from one lucky run. What is stable across every
+  reading, and is what the budgets actually guard, is the *shape*: growth factor
+  1.0–1.1, and 94–97% of wall time inside the analyzer subprocesses.
 
 ---
 
@@ -277,7 +295,7 @@ Measured 2026-08-11, after the pass above.
 | Live fire — recall | `python src/evaluation/run_live_eval.py` | 16/16 planted findings in a real application; recall 1.00 |
 | Live fire — noise | (same run) | 0 blocking secret FPs over 150.5 kLOC of `requests`, `flask`, `axios`; 22 downgraded to low |
 | Live fire — signal | (same run) | `pygoat` 203, `dvpwa` 245, `nodegoat` 18 findings; 65% of bandit's output filtered as unactionable |
-| Performance | `python src/evaluation/run_perf_bench.py` | ~4,300 files/s walk; ~56 kLOC/s pure-Python; 11.1 kLOC/s end to end with real analyzers |
+| Performance | `python src/evaluation/run_perf_bench.py` | ~2,000–4,000 files/s walk; ~30–50 kLOC/s pure-Python; ~10 kLOC/s end to end with real analyzers; growth 1.0–1.1 |
 | Budgets and scale, as tests | `pytest -m quality` | 14 tests |
 | Everything else | `pytest -m "not quality"` | 307 tests, 88%+ coverage |
 | Extension parity | `node --test tests/js/parity.test.mjs` | 22 tests; secrets P 1.00 / R 1.00 |
