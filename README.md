@@ -7,14 +7,19 @@
 Detection is done by *tools*, deterministically. An LLM, if you configure one, only judges what they found.
 
 [![CI](https://github.com/toosh-legacy/github-py-review/actions/workflows/ci.yml/badge.svg)](https://github.com/toosh-legacy/github-py-review/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/repo-security-scanner)](https://pypi.org/project/repo-security-scanner/)
-[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)](https://pypi.org/project/repo-security-scanner/)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)](#run-it-locally)
+[![Tests](https://img.shields.io/badge/tests-307%20passing-brightgreen)](#development)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ```bash
-pip install repo-security-scanner
+git clone https://github.com/toosh-legacy/github-py-review.git
+cd github-py-review && pip install -e .
 reposec scan .
 ```
+
+> **Not published yet.** There is no PyPI package and no public container image
+> — run it from a clone, as above. [Setup in full →](#run-it-locally) ·
+> [publishing, when we get there →](docs/RELEASE.md)
 
 📖 **[Full CLI manual →](docs/CLI.md)**&nbsp;&nbsp;·&nbsp;&nbsp;🏗️ **[Codebase tour →](docs/GUIDE.md)**&nbsp;&nbsp;·&nbsp;&nbsp;🚀 **[Release process →](docs/RELEASE.md)**
 
@@ -136,35 +141,131 @@ The browser extension is a second implementation of the secret rules in JavaScri
 
 ---
 
-## Quick start
+## Run it locally
+
+There is no published package yet, so everything below runs from a clone. It
+takes about two minutes.
+
+**You need:** Python **3.12 or 3.13**, `git`, and — only for scanning
+JavaScript/TypeScript — **Node.js 18+** with npm.
+
+### 1. Clone and install
+
+<table>
+<tr><th align="left">macOS / Linux</th><th align="left">Windows (PowerShell)</th></tr>
+<tr valign="top"><td>
 
 ```bash
-pip install repo-security-scanner          # detection only
-pip install "repo-security-scanner[llm]"   # + LLM triage
+git clone https://github.com/toosh-legacy/github-py-review.git
+cd github-py-review
 
-reposec scan .                     # working tree
-reposec scan . --history           # + git history — finds deleted secrets
-reposec scan . --fail-on high      # exit 1 for CI
-reposec scan . --format sarif      # GitHub Security tab
-reposec doctor                     # what can actually run here
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install -e .
 ```
 
-The JS/TS detector needs Node:
+</td><td>
+
+```powershell
+git clone https://github.com/toosh-legacy/github-py-review.git
+cd github-py-review
+
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+pip install -e .
+```
+
+</td></tr>
+</table>
+
+`-e` is an *editable* install: the `reposec` command runs the code in your
+working tree, so edits take effect with no reinstall.
+
+Want the optional LLM triage stage too? `pip install -e ".[llm]"`.
+
+### 2. Add the JavaScript detector (optional)
+
+Python scanning works immediately. JS/TS needs Node:
 
 ```bash
 reposec install-eslint
 ```
 
-**→ [The full CLI manual](docs/CLI.md)** covers every command, flag, exit code, output format, CI recipes, `.secscanignore`, configuration, and troubleshooting.
+Skip it and JS files still get pattern-rule coverage — the scan will say so
+rather than reporting a clean result it did not earn.
 
-### Docker
+### 3. Check what actually works on your machine
 
 ```bash
-docker run --rm -v "$PWD:/repo:ro" \
-  ghcr.io/toosh-legacy/github-py-review scan /repo --history
+reposec doctor
 ```
 
-Read-only mount, because the scanner never writes to your repository. The image ships its own detectors and **fails to build** if bandit, eslint, node, git or OSV cannot run inside it.
+```console
+  [ok  ] secrets                built in — regex fingerprints + entropy
+  [ok  ] dependencies           OSV over HTTPS (package names only)
+  [ok  ] code (python)          bandit
+  [ok  ] code (js/ts)           eslint-plugin-security
+  [MISS] triage (llm)           no model configured — triage skipped
+```
+
+`[MISS] triage (llm)` is expected and fine — detection is identical without a
+model. Run this first on any new machine: a scanner that quietly covers half of
+what you think it does is the failure this command exists to prevent.
+
+### 4. Scan something
+
+```bash
+reposec scan .                     # this repository
+reposec scan ../my-project         # any other checkout
+reposec scan . --history           # + git history — finds deleted secrets
+reposec scan . --fail-on high      # exit 1, for a CI gate
+reposec scan . --format json       # machine-readable
+```
+
+No install at all? `python -m reposec scan .` works from the repo root with the
+dependencies installed.
+
+**→ [The full CLI manual](docs/CLI.md)** covers every command, flag, exit code,
+output format, `.secscanignore`, configuration, CI recipes, and troubleshooting.
+
+### Run it via Docker instead
+
+Build the image yourself — none is published:
+
+```bash
+docker build -f deploy/Dockerfile -t reposec:local .
+
+docker run --rm -v "$PWD:/repo:ro" reposec:local scan /repo --history
+```
+
+Read-only mount, because the scanner never writes to your repository. The image
+ships its own detectors and **fails to build** if bandit, eslint, node, git or
+OSV cannot run inside it — so a green build is a working scanner, not just
+present files.
+
+> On Windows PowerShell use `-v "${PWD}:/repo:ro"`; in Git Bash prefix the
+> command with `MSYS_NO_PATHCONV=1` or it will rewrite `/repo` into a Windows
+> path.
+
+### Troubleshooting a fresh clone
+
+| Symptom | Fix |
+|---|---|
+| `reposec: command not found` | The venv is not active. Re-run the activate line, or use `python -m reposec`. |
+| `doctor` shows `code (js/ts)` missing | `reposec install-eslint`. Needs Node and npm on PATH. |
+| `install-eslint` used `--dir` | Export `REPOSEC_ESLINT_DIR=<that directory>` — the command prints the exact line. |
+| `--history` found nothing | You need real history. A shallow clone has none to walk. |
+| Every dependency says "unresolved" | Your manifest declares ranges, not pins. Commit a lockfile; the scanner reports rather than guessing. |
+| `ScriptBlock` / activation error on Windows | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then activate again. |
+
+### Publishing
+
+Nothing is published yet — no PyPI package, no public image, no Web Store
+listing. When that changes, [`docs/RELEASE.md`](docs/RELEASE.md) is the full
+process: what to bump, how the tag drives the three artifacts, and the one-time
+PyPI and GHCR setup it needs first.
 
 ---
 

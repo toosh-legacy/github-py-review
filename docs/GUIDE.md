@@ -187,10 +187,12 @@ over hundreds of kLOC, so it is slow and split out — `pytest -m quality` runs
 it, `pytest -m "not quality"` is the fast suite everyone runs before pushing.
 
 ### Packaging and CI
-- **Install:** `pip install repo-security-scanner` gives a `reposec` console
-  script. Everything lives under one `reposec` package; installing top-level
-  `config` or `schemas` modules into site-packages would be a namespace
-  land-grab that collides with other distributions.
+- **Install:** nothing is published yet, so this runs from a clone —
+  `pip install -e .` gives a `reposec` console script backed by your working
+  tree. The packaging is release-ready regardless: everything lives under one
+  `reposec` package, because installing top-level `config` or `schemas` modules
+  into site-packages would be a namespace land-grab that collides with other
+  distributions. See [`../README.md`](../README.md#run-it-locally).
 - **Docker:** `deploy/Dockerfile` builds in two stages — a Node stage installs
   eslint-plugin-security, then the Python image copies in both the plugin and
   the Node runtime. The build then *scans a fixture repository with `--strict`*,

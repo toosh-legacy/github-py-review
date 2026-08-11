@@ -3,16 +3,29 @@
 ## Setup
 
 ```bash
+git clone https://github.com/toosh-legacy/github-py-review.git
+cd github-py-review
+
 python -m venv .venv
+source .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
+
 pip install -r requirements-dev.txt
-cd src/reposec/detectors/eslint && npm install && cd -   # enables the JS/TS detector
+pip install -e .                   # editable, so `reposec` runs your working tree
+
+reposec install-eslint             # enables the JS/TS detector; needs Node + npm
+reposec doctor                     # confirm what can actually run here
 ```
+
+Nothing is published, so this clone *is* the install. Python 3.12 or 3.13 — CI
+runs both. [`README.md`](README.md#run-it-locally) has the fuller walkthrough,
+including Windows specifics and a troubleshooting table.
 
 ## Before you push
 
 ```bash
 ruff check .
 pytest -m "not quality"                  # the fast suite
+node --test tests/js/parity.test.mjs     # the extension must not drift
 reposec scan . --history --fail-on high  # what CI gates on
 ```
 

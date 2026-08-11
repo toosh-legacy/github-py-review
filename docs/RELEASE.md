@@ -1,5 +1,21 @@
 # Release checklist
 
+> **Status: nothing has been published yet.** No PyPI package, no public image,
+> no Web Store listing — the project runs from a clone
+> ([README](../README.md#run-it-locally)). This document is the process for when
+> that changes; none of it has been executed end to end.
+>
+> **Two prerequisites block the very first release**, and neither is in this
+> repository:
+>
+> 1. A PyPI **pending publisher** for `repo-security-scanner` — the project name
+>    is unclaimed, and trusted publishing cannot create a project that has no
+>    pending publisher configured. Without it the `pypi` job fails *after* the
+>    image has already been pushed, which is the worst outcome: half released.
+> 2. A GitHub environment named **`pypi`**.
+>
+> Do both before the first tag. See [§4](#4-first-run-prerequisites-once-before-the-first-tag).
+
 Three artifacts ship from one tag: the **PyPI package**, the **container image**,
 and the **Chrome extension**. The first two are automated; only the extension
 needs a human, because the store listing and the permission justifications do.

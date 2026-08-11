@@ -23,13 +23,22 @@ when something does not work.
 
 ## Install
 
+**There is no published package yet.** Run it from a clone:
+
 ```bash
-pip install repo-security-scanner          # detection only
-pip install "repo-security-scanner[llm]"   # + the optional LLM triage stage
+git clone https://github.com/toosh-legacy/github-py-review.git
+cd github-py-review
+
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .\.venv\Scripts\Activate.ps1
+pip install -e .                                      # or: pip install -e ".[llm]"
 ```
 
-Python 3.12 or 3.13. Python scanning works immediately. JavaScript and
-TypeScript scanning needs Node.js on your PATH plus a one-time install:
+Python 3.12 or 3.13. `-e` is an editable install, so the `reposec` command runs
+your working tree and edits take effect without reinstalling. Without any
+install, `python -m reposec` works from the repository root.
+
+Python scanning works immediately. JavaScript and TypeScript scanning needs
+Node.js on your PATH plus a one-time install:
 
 ```bash
 reposec install-eslint
@@ -40,6 +49,11 @@ Confirm what is active before you trust a clean result:
 ```bash
 reposec doctor
 ```
+
+See [the README](../README.md#run-it-locally) for the full first-run walkthrough,
+including Windows specifics. When the package is eventually published,
+`pip install repo-security-scanner` will replace the clone step and nothing else
+in this manual changes.
 
 ---
 
@@ -307,6 +321,10 @@ old behaviour. Otherwise use environment variables.
 
 ## Using it in CI
 
+Until the package is published, CI has to install it from git. Every recipe
+below uses that form; swap it for `pip install repo-security-scanner` once a
+release exists and nothing else changes.
+
 ### GitHub Actions
 
 ```yaml
@@ -314,10 +332,13 @@ old behaviour. Otherwise use environment variables.
   with:
     fetch-depth: 0                    # --history needs real history
 
-- run: pip install repo-security-scanner
+- run: pip install "git+https://github.com/toosh-legacy/github-py-review@main"
 - run: reposec install-eslint          # only if you scan JS/TS
 - run: reposec scan . --history --fail-on high
 ```
+
+Pin to a tag or commit rather than `@main` for anything you need to be
+reproducible — `@v1.1.0` once that tag exists.
 
 Findings in the Security tab instead of a log nobody reads:
 
@@ -336,7 +357,7 @@ Findings in the Security tab instead of a log nobody reads:
 security-scan:
   image: python:3.13-slim
   before_script:
-    - pip install repo-security-scanner
+    - pip install "git+https://github.com/toosh-legacy/github-py-review@main"
   script:
     - reposec scan . --fail-on high --no-color
 ```
@@ -372,24 +393,28 @@ fail builds for a missing linter, and people will remove the whole step.
 
 ## Docker
 
+No image is published, so build it from the clone:
+
 ```bash
-docker run --rm -v "$PWD:/repo:ro" \
-  ghcr.io/toosh-legacy/github-py-review scan /repo --history
+docker build -f deploy/Dockerfile -t reposec:local .
+
+docker run --rm -v "$PWD:/repo:ro" reposec:local scan /repo --history
 ```
 
 - **Read-only mount.** The scanner never writes to your repository.
 - The image ships bandit, eslint-plugin-security, Node and git. It **fails to
-  build** if any of them cannot run, rather than shipping a half-scanner.
+  build** if any of them cannot run, rather than shipping a half-scanner — so a
+  green build is a working scanner, not just the right files.
 - It runs as uid `10001`, not root. Git normally refuses to read a repository it
   thinks belongs to someone else, which would make `--history` silently find
   nothing; the image configures `safe.directory` so it does not.
 
-Pin a version for anything reproducible:
+Platform notes: on Windows PowerShell use `-v "${PWD}:/repo:ro"`; in Git Bash,
+prefix with `MSYS_NO_PATHCONV=1` or it rewrites `/repo` into a Windows path.
 
-```bash
-docker run --rm -v "$PWD:/repo:ro" \
-  ghcr.io/toosh-legacy/github-py-review:v1.1.0 scan /repo --fail-on high
-```
+Once images are published to GHCR the run command becomes
+`docker run --rm -v "$PWD:/repo:ro" ghcr.io/toosh-legacy/github-py-review:v1.1.0 scan /repo`,
+and everything else here is unchanged.
 
 ---
 
