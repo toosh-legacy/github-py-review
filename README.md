@@ -47,7 +47,7 @@ It runs **fully offline**. Nothing leaves your machine except package names and 
 | **False positives** | **0** blocking secret findings across 570 kLOC of `requests`, `flask`, `axios` and 1,500 installed packages |
 | **Labelled benchmark** | P **0.96** · R **1.00** · F1 **0.98** over 111 cases — *half of them decoys* |
 | **Noise** | 0.23 code findings per kLOC · **65%** of raw bandit output filtered as unactionable |
-| **Speed** | 11.1 kLOC/s end to end with real analyzers; linear to 4,000+ files |
+| **Speed** | ~10 kLOC/s end to end with real analyzers; scales linearly to 4,000+ files |
 
 Every number is reproducible: `python src/evaluation/run_live_eval.py`. See [Benchmarks](#benchmarks).
 
@@ -138,6 +138,79 @@ Eight stages, run in order by a `for` loop. There is **no orchestration framewor
 ### Two implementations, kept honest
 
 The browser extension is a second implementation of the secret rules in JavaScript. Its **rule table is generated** from `rules.py`, and `tests/js/parity.test.mjs` scores it against the *same labelled benchmark* the Python detector is scored against — not merely diffing regexes, because the drift that matters is in suppression logic, not in the patterns.
+
+---
+
+## Performance
+
+### What it gets through
+
+Real repositories, scanned end to end with the real analyzers — bandit and
+eslint subprocesses included, not a synthetic loop:
+
+| Repository | Files | kLOC | Wall time | Findings |
+|---|---:|---:|---:|---:|
+| `psf/requests` | 123 | 19.6 | **2.2 s** | 127 |
+| `pallets/flask` | 228 | 36.8 | **3.9 s** | 28 |
+| `axios/axios` | 449 | 94.1 | **8.5 s** | 297 |
+| `OWASP/NodeGoat` | 88 | 6.9 | **2.4 s** | 18 |
+| `pygoat` | 264 | 18.8 | **6.5 s** | 203 |
+
+Roughly **10 kLOC/s end to end**. A typical service repository finishes in a
+couple of seconds; a 100 kLOC front end in under ten. Reproduce with
+`python src/evaluation/run_live_eval.py`.
+
+Other measured ceilings:
+
+| | |
+|---|---|
+| Tree walk | **~2,000–4,000 files/s**, while pruning an equal number of vendored files it never opens |
+| Pure-Python path (no analyzers) | **~30–50 kLOC/s** |
+| Cold start | **~260 ms** to `--version`; the package imports in ~0.17 s |
+| Largest corpus scanned in one run | **419.6 kLOC** across 1,500 files |
+
+### Where the time actually goes
+
+```
+code (bandit + eslint subprocesses)  ████████████████████  ~95%
+secrets (regex + entropy)            █                      ~4%
+dependencies (OSV, cached)           ·                      <1%
+suppress · redact · aggregate        ·                      <1%
+```
+
+This is the single most useful fact about the scanner's performance, and it
+sets where optimisation is worth doing: **tuning a regex saves nothing**, while
+one wasted analyzer invocation costs seconds. It is why bandit and eslint are
+chunked and why the temp tree is written once.
+
+### It scales linearly
+
+Cost per file does not grow with repository size — measured from 250 to 4,000
+files, the growth factor sits at **1.0–1.1** (1.0 is perfectly linear). A
+super-linear pipeline is invisible on a fixture and fatal on a monorepo, so this
+is enforced as a test (`pytest -m quality`), not just measured.
+
+### Bounds that keep a big repository predictable
+
+| Bound | Default | Behaviour when hit |
+|---|---|---|
+| Per-file size | 400 KB | File skipped |
+| Aggregate read budget | 256 MB | Read stops; **reports how many files went unscanned** |
+| bandit chunk | 2,000 files | A timeout costs one chunk, not the language |
+| eslint chunk | 1,000 files | Same, and names the file count |
+| OSV queries | 1,000 packages | Excess **reported as unchecked**, never dropped silently |
+
+Every one of these is counted and surfaced as a degraded note, and `--strict`
+turns any of them into a distinct exit code. Reporting "scanned the first
+256 MB" is honest; being OOM-killed is not.
+
+> **On these numbers.** They are wall-clock on one Windows laptop, and repeated
+> readings varied by up to 40% with background load — which is why the ranges
+> above are ranges. The *shape* is what transfers: linear scaling, ~95% of time
+> in the analyzers, and a walk that prunes rather than reads. The speed budgets
+> in `pytest -m quality` sit at roughly a quarter of measured throughput so they
+> catch an order-of-magnitude regression rather than a slow afternoon. Measure
+> your own with `python src/evaluation/run_perf_bench.py`.
 
 ---
 
@@ -327,9 +400,11 @@ It has already earned its place: on its first run it found five `high` false pos
 
 ### 4. Speed
 
-~4,300 files/s to walk a tree, ~56 kLOC/s on the pure-Python path, growth factor **1.01** from 250 to 4,000 files. The analyzers are ~95% of wall time: tuning a regex saves nothing, a wasted bandit invocation costs seconds.
-
-Budgets for all of this are enforced as tests: `pytest -m quality`.
+Covered in full under [Performance](#performance): ~10 kLOC/s end to end, linear
+scaling, and ~95% of wall time inside the analyzer subprocesses. Budgets are
+enforced as tests (`pytest -m quality`) at roughly a quarter of measured
+throughput, so they catch an order-of-magnitude regression rather than a busy
+machine.
 
 ### Not yet measured: triage lift
 
